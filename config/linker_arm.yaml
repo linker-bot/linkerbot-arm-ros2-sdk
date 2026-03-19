@@ -1,0 +1,4 @@
+linker_arm_node:
+  ros__parameters:
+    publish_rate: 100.0
+    can_interface: "can0"

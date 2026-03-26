@@ -1,0 +1,6 @@
+# CAN设备配置文件
+# 自动生成，请勿手动编辑
+/**:
+  ros__parameters:
+    left_arm: "can1" # A7Lite Left Arm
+    right_arm: "can2" # A7Lite Right Arm

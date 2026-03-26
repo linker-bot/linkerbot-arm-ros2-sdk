@@ -1,7 +1,17 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
 *.egg-info/
+dist/
+
+# ROS2 / colcon (workspace level, added here for safety)
 build/
 install/
 log/
+
+# IDE / Editor
 .vscode/
+.idea/
+*.swp
+*~

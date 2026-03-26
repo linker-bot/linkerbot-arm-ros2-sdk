@@ -227,7 +227,7 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 | J6 Wrist Pitch | Wrist_Pitch | [-1.57, 1.57] | [-1.57, 1.57] | 180° |
 | J7 Wrist Roll | Wrist_Roll | [-1.57, 1.57] | [-1.57, 1.57] | 180° |
 
-### A7 Lite (灵族V2)
+### A7 Lite
 
 | 关节 | URDF 名称 | 左臂 (rad) | 右臂 (rad) | 范围 (°) |
 |------|----------|-----------|-----------|---------|

@@ -104,7 +104,10 @@ class ArmNode(Node):
         # ── Step 2: 标定零位（可选）+ 使能 + 慢速回零 ────────────────
         if self.calibrate_zero_on_startup:
             self.arm.calibrate_zero()
-            self.get_logger().info("Zero calibration completed")
+            time.sleep(2.0)
+            self.get_logger().info(
+                "Zero calibration completed (waited 2s for Flash write)"
+            )
 
         if self.auto_enable:
             self.arm.disable()
@@ -329,8 +332,9 @@ class ArmNode(Node):
             return response
         try:
             self.arm.calibrate_zero()
+            time.sleep(2.0)
             response.success = True
-            response.message = f"{self.side} arm zero calibrated"
+            response.message = f"{self.side} arm zero calibrated (waited 2s for Flash write)"
             self.get_logger().info(response.message)
         except Exception as e:
             response.success = False

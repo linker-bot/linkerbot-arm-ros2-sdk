@@ -73,6 +73,10 @@ class ArmProtocol(ABC):
     def set_accelerations(self, accelerations: list[float]) -> None:
         """设置各关节加速度上限 (rad/s²)。范围 [1, 50]。"""
 
+    @abstractmethod
+    def set_position_kps(self, kps: list[float]) -> None:
+        """设置各关节位置环 KP（刚度）。"""
+
     # ── 状态读取 ─────────────────────────────────────────────────
 
     @abstractmethod

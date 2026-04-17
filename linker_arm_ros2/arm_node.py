@@ -117,6 +117,10 @@ class ArmNode(Node):
             self.enabled = True
             self.get_logger().info("Arm enabled")
 
+            if self.arm_type.lower() == "a7lite":
+                self.arm.set_position_kps([20.0] * NUM_JOINTS)
+                self.get_logger().info("A7 Lite position KP set to 20.0")
+
             self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
             self.get_logger().info(
                 f"Homing at slow speed ({self.slow_max_velocity} rad/s)..."

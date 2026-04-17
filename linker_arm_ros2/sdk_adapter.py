@@ -137,6 +137,9 @@ class LinkerBotSDKAdapter(ArmProtocol):
     def set_accelerations(self, accelerations: list[float]) -> None:
         self._arm.set_accelerations(accelerations)
 
+    def set_position_kps(self, kps: list[float]) -> None:
+        self._arm.set_position_kps(kps)
+
     # ── 状态读取 ─────────────────────────────────────────────────
 
     def get_angles(self) -> list[float]:

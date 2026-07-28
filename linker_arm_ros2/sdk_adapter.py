@@ -72,10 +72,11 @@ def _ensure_sdk_importable() -> None:
 
 _ensure_sdk_importable()
 
-from linkerbot import A7, A7lite  # noqa: E402
+from linkerbot import A7, A7lite, P7  # noqa: E402
 
 _ARM_CLASSES: dict[str, type] = {
     "a7": A7,
+    "p7": P7,
     "a7lite": A7lite,
 }
 

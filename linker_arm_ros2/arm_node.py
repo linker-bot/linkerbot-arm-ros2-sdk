@@ -60,6 +60,7 @@ class ArmNode(Node):
         self.declare_parameter("normal_max_velocity", 3.0)
         self.declare_parameter("startup_delay", 6.0)
         self.declare_parameter("filter_window", 5)
+        self.declare_parameter("position_kp", 20.0)
 
         self.arm_type = self.get_parameter("arm_type").value
         self.side = self.get_parameter("side").value
@@ -74,6 +75,7 @@ class ArmNode(Node):
         self.normal_max_velocity = self.get_parameter("normal_max_velocity").value
         self.startup_delay = self.get_parameter("startup_delay").value
         self.filter_window = self.get_parameter("filter_window").value
+        self.position_kp = float(self.get_parameter("position_kp").value)
 
         # ── 关节名称（与电机 CAN ID 一致）──────────────────────────
         self.joint_names = [str(mid) for mid in _MOTOR_IDS[self.side]]
@@ -117,9 +119,7 @@ class ArmNode(Node):
             self.enabled = True
             self.get_logger().info("Arm enabled")
 
-            if self.arm_type.lower() == "a7lite":
-                self.arm.set_position_kps([20.0] * NUM_JOINTS)
-                self.get_logger().info("A7 Lite position KP set to 20.0")
+            self._apply_position_kps()
 
             self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
             self.get_logger().info(
@@ -253,6 +253,13 @@ class ArmNode(Node):
     # Service 回调
     # ================================================================
 
+    def _apply_position_kps(self) -> None:
+        """A7 Lite: apply position-loop KP from config to all joints."""
+        if self.arm_type.lower() != "a7lite":
+            return
+        self.arm.set_position_kps([self.position_kp] * NUM_JOINTS)
+        self.get_logger().info(f"A7 Lite position KP set to {self.position_kp}")
+
     def _srv_enable(self, request, response):
         try:
             self.arm.disable()
@@ -260,6 +267,7 @@ class ArmNode(Node):
             self.arm.enable()
             time.sleep(0.2)
             self.enabled = True
+            self._apply_position_kps()
             self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
             self.arm.home(blocking=True)
             response.success = True

@@ -56,6 +56,7 @@ def _launch_setup(context):
             "normal_max_velocity": float(cfg.get("normal_max_velocity", 3.0)),
             "startup_delay": float(cfg.get("startup_delay", 6.0)),
             "filter_window": int(cfg.get("filter_window", 5)),
+            "position_kp": float(cfg.get("position_kp", 20.0)),
         }],
     )
 

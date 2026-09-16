@@ -1,139 +1,124 @@
-# linker_arm_ros2 环境配置说明
+# ROS2 与独立 arm SDK 环境配置
 
-## 目录
+ROS2 直接依赖 `linkerbot-arm>=0.6.0,<0.7.0`，Python 导入为 `linkerbot_arm`。
+无需完整 SDK 聚合包或 hand 包；三个独立包使用不同命名空间，可以共存安装。
 
-- [问题背景](#问题背景)
-- [依赖冲突分析](#依赖冲突分析)
-- [解决方案: 系统 Python + SDK 源码](#解决方案-系统-python--sdk-源码)
-- [部署到新机器](#部署到新机器)
-- [验证步骤](#验证步骤)
+## 运行依赖
 
----
+- A7、A7lite、P7 导入时需要 NumPy/SciPy，构造时均创建 `ArmKinetix` 并加载 Pinocchio。
+- 即使只使用关节控制，也需要 Pinocchio；源码加载同样需要完整运行依赖。
+- arm 固定依赖 `linkerbot-transport[can]==1.0.0`；ROS2 无需维护另一份通信实现。
+- SDK 基础依赖要求 NumPy >=1.24、SciPy >=1.10、Pydantic 2.x、python-can >=4.6.1。
 
-## 问题背景
+## ROS2 系统依赖方案
 
-`linker_arm_ros2` 是一个 ROS2 功能包，同时依赖：
-- **ROS2 生态** (rclpy, sensor_msgs 等) — 运行在系统 Python 环境中
-- **linkerbot-python-sdk** (A7/A7Lite 机械臂控制) — 依赖 numpy>=2.2.6, scipy>=1.15.3
-
-这两者存在 **numpy 版本冲突**。
-
----
-
-## 依赖冲突分析
-
-### 冲突链
-
-```
-ROS2 Jazzy (系统 apt 安装)
-  └─ python3-pinocchio 3.x
-       └─ 要求 numpy < 2.0 (系统 numpy 1.26.4)
-
-linkerbot-py 0.4.2 (pip install)
-  └─ 要求 numpy >= 2.2.6
-  └─ 要求 scipy >= 1.15.3
-```
-
-### 为什么虚拟环境不能解决
-
-| 方案 | 问题 |
-|------|------|
-| 在 venv 中 `pip install linkerbot-py` | venv 安装 numpy 2.x，ROS2 节点 import pinocchio 时报错 `numpy 1.x cannot run in numpy 2.x` |
-| 在系统 `pip install linkerbot-py` | 覆盖系统 numpy 1.26.4 为 2.x，破坏 ROS2 所有功能 |
-| venv 中 `pip install numpy<2.0 linkerbot-py` | linkerbot-py 的 pyproject.toml 要求 numpy>=2.2.6，pip 解析冲突拒绝安装 |
-
----
-
-## 解决方案: 系统 Python + SDK 源码
-
-**核心思路**：不通过 pip 安装 linkerbot-py，而是以源码形式引用 SDK。
-
-```
-系统 Python 3.12
-├── numpy 1.26.4     ← apt (ROS2 兼容)
-├── scipy 1.11.4     ← apt (ROS2 兼容)
-├── pinocchio 3.x    ← apt (ROS2 运动学)
-├── pydantic 2.x     ← pip --user (SDK 数据模型)
-├── python-can 4.6.1 ← pip --user (CAN 通信)
-└── linkerbot SDK    ← 源码 (git submodule, 运行时 sys.path 注入)
-```
-
-### 为什么这样可行
-
-1. linkerbot-python-sdk 的核心代码 **本身不直接 import numpy/scipy** — 它们只在运动学模块 (`ArmKinetix`) 中使用
-2. 系统 numpy 1.26.4 + scipy 1.11.4 **完全满足** pinocchio 和 SDK 运动学计算的需求
-3. SDK 的 `pyproject.toml` 中 `numpy>=2.2.6` 是 pip 层面的版本约束，但源码引用绕过了 pip 的版本检查
-4. 通过 `sdk_adapter.py` 中的 `sys.path.insert(0, SDK_SRC)` 动态加载 SDK
-
-### 依赖安装位置
-
-| 依赖 | 安装位置 | 安装方式 | 说明 |
-|------|----------|----------|------|
-| numpy 1.26.4 | `/usr/lib/python3/dist-packages/` | apt (随 ROS2) | 不要升级 |
-| scipy 1.11.4 | `/usr/lib/python3/dist-packages/` | apt (随 ROS2) | 不要升级 |
-| pinocchio | `/usr/lib/python3/dist-packages/` | apt (随 ROS2) | 运动学依赖 |
-| pydantic 2.x | `~/.local/lib/python3.12/site-packages/` | `pip install --user` | SDK 数据模型 |
-| python-can >=4.6.1 | `~/.local/lib/python3.12/site-packages/` | `pip install --user` | CAN 通信 |
-| linkerbot SDK | `src/linkerbot-python-sdk/src/` | git submodule (源码) | **不用 pip install** |
-
-### data_collection venv 的隔离
-
-`~/.venv/data_collection` 是数据采集的主虚拟环境。`linker_arm_ros2` **不依赖此 venv**：
-- `linker_arm_ros2` 通过 `ros2 launch` 启动，使用系统 Python
-- `data_collection` venv 中不需要安装 `linkerbot-py`
-- `requirements.txt` 中的 `linkerbot-py` 条目应删除（由 submodule 源码替代）
-
----
-
-## 部署到新机器
-
-目标机器已具备 ROS2 (Jazzy/Humble) 及其系统依赖（numpy, scipy, pinocchio, python-can, pydantic）。
-只需拉取 SDK 源码并构建：
+使用对应 ROS2 发行版的 Python，例如 Jazzy 的系统 Python 3.12。系统 Pinocchio 已可用时，
+安装基础 SDK，不额外安装 PyPI 的 `pin`。需要系统依赖时可执行：
 
 ```bash
-cd ~/linkerbot_data_collection/linkerhand_data_collection_ws
+sudo apt install python3-numpy python3-scipy python3-venv ros-jazzy-pinocchio
+source /opt/ros/jazzy/setup.bash
+/usr/bin/python3 -m venv --system-site-packages /path/to/ros-arm-venv
+source /path/to/ros-arm-venv/bin/activate
+```
 
-# 拉取 SDK 源码
-git submodule update --init src/linkerbot-python-sdk
+transport 位于公司 Gitea。使用已有 SSH 权限安装已验证的 1.0.0 源码：
 
-# 构建
+```bash
+python -m pip install 'linkerbot-transport[can] @ git+ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-transport.git@e8c8bf7cc424cffa0234e659537c64f102b22426'
+```
+
+已有公司包源认证时，也可以安装发布 wheel：
+
+```bash
+python -m pip install --index-url https://gitea.linkerhub.work/api/packages/zhuzhixiang/pypi/simple \
+  --extra-index-url https://pypi.org/simple 'linkerbot-transport[can]==1.0.0'
+```
+
+包源凭据使用已有 pip/keyring/netrc 配置。arm 0.6.x 源码可从独立仓库获取：
+
+```bash
+git clone ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-arm.git /path/to/linkerbot-arm
+git -C /path/to/linkerbot-arm checkout 09088e0bcfaceecd276736a5c10b8192862319f2
+python -m pip install -c /path/to/linkerbot-arm/constraints/ros2.txt -e /path/to/linkerbot-arm
+python -m pip install colcon-common-extensions
+```
+
+这里固定已验证的 arm 0.6.0 源码提交，不假定该版本已经上传包源。已有正式发行 wheel 时，
+也可在同一环境安装匹配版本的 wheel。`constraints/ros2.txt` 将 NumPy 限制为 1.x、SciPy
+限制为兼容区间，供采用 NumPy 1.x 系统二进制库的部署使用；实际 ABI 兼容性须由下方导入和模型检查确认。
+
+在当前环境中用 colcon 构建，生成的节点入口才会使用该环境的 Python：
+
+```bash
+cd /path/to/ros-workspace
 colcon build --packages-select linker_arm_ros2 --symlink-install
+source install/setup.bash
 ```
 
-### 配置
+系统 `/usr/bin/colcon` 使用系统 Python，激活 venv 不会自动改变其 shebang。
+`colcon build`/rosdep 不负责从公司 Python 包源安装 SDK，先完成上述依赖安装。
+Humble 应使用对应 Python 3.10，并单独确认依赖版本与二进制兼容性。
 
-修改 `src/linker_arm_ros2/config/arm_config.yaml`，设置：
-- `arm_type`：`"a7"` 或 `"a7lite"`
-- `left_arm` / `right_arm`：对应的 CAN 接口（如 `"can0"`、`"can1"`）
+独立 Python 应用可在专用环境安装 `linkerbot-arm[kinetix]`，由 PyPI 提供 Pinocchio 二进制依赖。
+该 extra 可能要求 NumPy 2，应与既有 ROS2 系统 NumPy/Pinocchio 方案分开配置。
 
-### 启动
+## 源码发现与旧环境变量
+
+所有运行依赖已经安装时，可以设置：
 
 ```bash
-source install/setup.bash
-ros2 launch linker_arm_ros2 dual_arm.launch.py
+export LINKERBOT_ARM_SRC=/path/to/linkerbot-arm/src
 ```
 
----
+也接受仓库根目录。自动发现支持并列仓库和 colcon 工作空间布局：
 
-## 验证步骤
+```text
+workspace/src/linker_arm_ros2/
+workspace/src/linkerbot-arm/
+```
 
-部署完成后，执行以下验证：
+优先级为：可导入的 `linkerbot_arm` → `LINKERBOT_ARM_SRC` → 旧变量
+`LINKERBOT_SDK_SRC` → 附近的独立 `linkerbot-arm` 仓库。
+
+旧变量保留一个过渡周期，使用时输出迁移提示。它可以指向新的独立 arm 源码，或临时显式
+指定旧完整 SDK 源码；后者加载 `linkerbot.arm`，仅用于过渡。推荐改为新变量并指向独立仓库。
+旧 `linkerbot-python-sdk` 不再自动查找，环境中已安装的旧 `linkerbot` 也不作为自动回退来源。
+
+显式路径无效时直接报错；SDK 内部缺少依赖时保留原始异常。环境变量不会覆盖已经可导入的
+独立 arm 包，修改 SDK 来源后应重新启动 Python 进程。
+
+## 实际控制调用
+
+- 流式控制保持 `ArmNode → LinkerBotSDKAdapter.set_angles → SDK._set_angles`。
+- ROS2 适配器支持 A7、A7lite、P7；标定与生命周期工具仍只开放 A7/A7lite。
+- `world_frame`、`tcp_offset` 是节点参数，当前 launch 不从 YAML 转发；默认分别为 `urdf` 和零偏移。
+- `position_kp` 在节点中只应用于 A7lite。
+
+## 无硬件检查
+
+安装完成后，在运行 ROS2 的同一 Python 环境执行：
 
 ```bash
-# 1. 系统 numpy 兼容 ROS2
-python3 -c "import numpy; print('numpy:', numpy.__version__)"
-# 预期: 1.26.4
-
-# 2. pinocchio 可正常导入
-python3 -c "import pinocchio; print('pinocchio OK')"
-
-# 3. SDK submodule 源码可导入
-PYTHONPATH=src/linkerbot-python-sdk/src:$PYTHONPATH python3 -c "from linkerbot import A7; print('SDK OK')"
-
-# 4. colcon build 成功
-colcon build --packages-select linker_arm_ros2 --symlink-install
-
-# 5. ROS2 节点可启动
-source install/setup.bash
-ros2 launch linker_arm_ros2 dual_arm.launch.py
+python -c "import numpy, scipy, pinocchio; print(numpy.__version__, scipy.__version__, pinocchio.__version__)"
+python -c "import linkerbot_arm; from linkerbot_arm import A7, A7lite, P7; print(linkerbot_arm.__file__)"
+python -c "from linkerbot_arm.arm.kinetix import ArmKinetix; print(ArmKinetix.from_builtin('a7', 'left').forward_kinematics([0.0]*7))"
+python -m pip check
 ```
+
+源码方式也可由公共 loader 完成加载检查：
+
+```bash
+python -c "from linker_arm_ros2.sdk_loader import load_sdk; sdk = load_sdk(); print(sdk.__name__, sdk.__file__)"
+```
+
+从 ROS2 仓库运行回归：
+
+```bash
+python -m pip install -e '.[test]'
+source /opt/ros/jazzy/setup.bash
+python -m pytest tests
+```
+
+测试使用真实 SDK 类的 autospec；ROS2 可用时使用真实 `rclpy`/消息类型和 launch 参数解析，
+以 fake arm 验证调用，不连接 CAN 或执行物理机械臂动作。缺少 ROS2 时对应测试跳过。

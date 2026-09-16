@@ -17,11 +17,13 @@ setup(
         (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
         (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
     ],
-    install_requires=["setuptools"],
+    install_requires=["setuptools", "linkerbot-arm>=0.6.0,<0.7.0"],
+    extras_require={"test": ["pytest", "pytest-timeout", "PyYAML"]},
+    python_requires=">=3.10",
     zip_safe=True,
     maintainer="linker-robot",
     maintainer_email="linker-robot@todo.todo",
-    description="ROS2 wrapper for linkerbot-python-sdk to control LinkerBot robotic arms",
+    description="ROS2 wrapper for linkerbot-arm to control LinkerBot robotic arms",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [

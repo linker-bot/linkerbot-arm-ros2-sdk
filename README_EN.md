@@ -2,7 +2,7 @@
 
 [中文文档](README.md)
 
-ROS2 Python package for controlling LinkerBot robotic arms (A7 / A7 Lite) via [linkerbot-python-sdk](https://docs.linkerhub.work/sdk/zh-cn/).
+ROS2 Python package for controlling LinkerBot robotic arms (A7 / A7 Lite / P7) via [linkerbot-arm](https://gitea.linkerhub.work/zhuzhixiang/linkerbot-arm).
 
 This package provides a unified ROS2 communication layer for both A7 and A7 Lite arms. The SDK handles all CAN bus communication, protocol encoding/decoding, and motor management internally — this package simply bridges the SDK API to standard ROS2 topics and services.
 
@@ -18,14 +18,15 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 - **Speed management**: slow start → normal after delay → slow on command timeout
 - **Dual-arm support**: launch left and right arms with separate CAN interfaces
 - **Topic-compatible** with existing downstream nodes — no changes required
-- **Zero-conflict deployment**: system Python + SDK source code, no virtualenv or numpy conflicts
+- **System dependency support**: compatible with NumPy 1.x and ROS2 Pinocchio; see the environment guide
 
 ## Prerequisites
 
 - ROS2 Jazzy (or Humble)
-- Python 3.12+ (system Python)
+- Python 3.10+ (use the Python shipped with your ROS2 distribution)
 - CAN interface configured and active (e.g. `can0`, `can1`)
-- linkerbot-python-sdk as a git submodule in `src/linkerbot-python-sdk/`
+- `linkerbot-arm` 0.6.x, imported as `linkerbot_arm`; see [environment setup](docs/environment_setup.md) for package and source installation
+- Pinocchio built for the selected NumPy version; see the environment guide
 - System packages: numpy, scipy, python-can, pydantic
 
 ## Build
@@ -33,13 +34,15 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 ```bash
 cd ~/linkerbot_data_collection/linkerhand_data_collection_ws
 
-# Initialize submodule (if not cloned with --recursive)
-git submodule update --init src/linkerbot-python-sdk
+# Install the independent arm SDK first and use colcon from the same Python environment.
+# Source deployments may place linkerbot-arm at src/linkerbot-arm.
 
 # Build
 colcon build --packages-select linker_arm_ros2 --symlink-install
 source install/setup.bash
 ```
+
+> Code verification: ROS2 supports P7; standalone calibration and lifecycle scripts still support A7/A7lite only.
 
 ## CAN Device Detection
 
@@ -77,7 +80,7 @@ All parameters are managed in `config/arm_config.yaml`:
 
 ```yaml
 # Arm model
-arm_type: "a7"            # a7 | a7lite
+arm_type: "a7lite"        # a7 | a7lite | p7
 
 # Startup behavior
 auto_enable: true         # Auto-enable motors on startup
@@ -88,6 +91,7 @@ left_arm: "can1"
 right_arm: "can0"
 
 # Motion parameters
+position_kp: 25.0        # Applied to A7lite only
 publish_rate: 100.0       # State publish rate (Hz)
 cmd_timeout: 6.0          # Seconds without command before switching to slow speed
 slow_max_velocity: 0.5    # Slow speed limit (rad/s)
@@ -97,6 +101,8 @@ filter_window: 1          # Moving average filter window size
 ```
 
 Changes take effect on next `ros2 launch` — no rebuild required.
+
+The CAN interface names above are examples. `world_frame` and `tcp_offset` are node parameters; the current launch files use their node defaults rather than loading them from YAML.
 
 ## Usage
 
@@ -241,7 +247,7 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 | J6 | L/R6_JOINT | [-1.57, 1.57] | [-1.57, 1.57] | 180° |
 | J7 | L/R7_JOINT | [-1.57, 1.57] | [-1.57, 1.57] | 180° |
 
-> Joint limits from `linkerbot-python-sdk/src/linkerbot/arm/kinetix/urdf/`
+> Joint limits from `linkerbot-arm/src/linkerbot_arm/arm/kinetix/urdf/`
 
 ## Architecture
 
@@ -266,13 +272,13 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
                    │ implements
 ┌──────────────────▼───────────────────────────────────────────┐
 │             sdk_adapter.py                                    │
-│  LinkerBotSDKAdapter — only module that imports linkerbot SDK │
-│  SDK lookup: pip install → env var → src/ submodule           │
+│  LinkerBotSDKAdapter — adapter for the linkerbot_arm SDK │
+│  SDK lookup: installed package → env var → arm checkout      │
 └──────────────────┬───────────────────────────────────────────┘
                    │
 ┌──────────────────▼───────────────────────────────────────────┐
-│          linkerbot-python-sdk (git submodule)                  │
-│  src/linkerbot-python-sdk/src/linkerbot/                      │
+│          linkerbot-arm (source / installed)                  │
+│  src/linkerbot-arm/src/linkerbot_arm/                      │
 │  A7 / A7lite → CAN Bus → Motors                              │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -289,29 +295,40 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 
 This node uses `set_angles()` for streaming control; `move_j()` is only used internally by `home()`.
 
-## SDK Source Resolution
+## SDK Loading and Migration
 
-`sdk_adapter.py` locates the linkerbot SDK in this order:
+The adapter, calibration tool and lifecycle script share `sdk_loader.py`:
 
-1. **pip-installed package** — if `linkerbot-py` is already installed via pip
-2. **Environment variable** — `LINKERBOT_SDK_SRC=/path/to/linkerbot-python-sdk/src`
-3. **Git submodule** — `<workspace>/src/linkerbot-python-sdk/src/` (default)
+1. `linkerbot_arm` importable in the current Python environment, including an installed package or an existing Python search path.
+2. `LINKERBOT_ARM_SRC=/path/to/linkerbot-arm/src`; repository roots are also accepted.
+3. Explicit `LINKERBOT_SDK_SRC`, retained for one transition cycle with a migration warning.
+4. A `linkerbot-arm` checkout beside the ROS2 repository or under an ancestor workspace's `src/`.
 
-For standard deployments, option 3 (git submodule) works out of the box.
+The old full SDK checkout is no longer discovered automatically, and an installed legacy
+`linkerbot` package is not an automatic fallback. The old variable may temporarily point
+to legacy full SDK source; the new variable only accepts the `linkerbot_arm` namespace.
+Invalid explicit paths and missing dependencies produce actionable errors. Source variables
+do not override an already importable canonical SDK; restart Python when changing SDK sources.
+
+ROS2 directly requires `linkerbot-arm>=0.6.0,<0.7.0`, without the aggregate SDK or hand package.
+The independent `linkerbot_arm`, `linkerbot_hand` and `linkerbot_transport` namespaces can coexist.
 
 ## Environment Strategy
 
-This package uses **system Python + SDK source code** to avoid environment conflicts:
+Use the Python version provided by your ROS2 distribution. Install the SDK, build with colcon
+and run the node in the same environment. Configure the ROS2 system Pinocchio/NumPy binaries
+separately from the PyPI `kinetix` extra.
 
-| Dependency | Source | Version |
-|-----------|--------|---------|
-| numpy | System (ROS2) | 1.26.x |
-| scipy | System (ROS2) | 1.11.x |
-| python-can | System / pip --user | >=4.6.1 |
-| pydantic | pip --user | 2.x |
-| linkerbot SDK | Git submodule `src/linkerbot-python-sdk/` | latest (source) |
+| Dependency | Version and source |
+|-----------|---------|
+| linkerbot-arm | 0.6.x; pin a verified release or source commit |
+| linkerbot-transport | 1.0.0; company package index or pinned source commit |
+| NumPy / SciPy | Meet SDK minimums and match the chosen Pinocchio binaries |
+| Pydantic | 2.x |
+| Pinocchio | Required when constructing all three arm models, including joint-only control |
 
-> See [docs/environment_setup.md](docs/environment_setup.md) for details.
+See [environment setup](docs/environment_setup.md) for installation, the company transport
+package source and checks that do not open hardware.
 
 ## File Structure
 
@@ -330,7 +347,8 @@ linker_arm_ros2/
 ├── linker_arm_ros2/             # Python package
 │   ├── __init__.py
 │   ├── arm_protocol.py          # Abstract interface (ABC)
-│   ├── sdk_adapter.py           # SDK adapter (only SDK-dependent module)
+│   ├── sdk_loader.py            # Shared SDK discovery
+│   ├── sdk_adapter.py           # ArmProtocol adapter for the arm SDK
 │   ├── arm_factory.py           # Factory: creates ArmProtocol instances
 │   └── arm_node.py              # Main ROS2 node
 │

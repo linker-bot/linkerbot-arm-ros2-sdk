@@ -1,78 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-linkerbot SDK 适配器。
+"""Adapt linkerbot-arm (or the legacy full SDK) to the ROS2 arm protocol.
 
-本模块是整个包中 **唯一** 直接引用 linkerbot-python-sdk 的地方。
-当 SDK 版本升级导致 API 变动时，只需修改此文件，上层代码无需改动。
-
-SDK 来源（按优先级）：
-  1. 已通过 pip 安装的 linkerbot-py 包
-  2. 环境变量 LINKERBOT_SDK_SRC 指定的源码路径
-  3. 工作空间 src/linkerbot-python-sdk/src/ 下的源码（git submodule）
+SDK discovery is shared with standalone tools through sdk_loader.
 """
-import logging
-import os
-import sys
 from typing import Literal
 
 from .arm_protocol import ArmProtocol
+from .sdk_loader import SDK_ENV_VAR as _SDK_ENV_VAR  # noqa: F401
+from .sdk_loader import ensure_sdk_importable as _ensure_sdk_importable  # noqa: F401
+from .sdk_loader import find_sdk_source as _find_sdk_source  # noqa: F401
+from .sdk_loader import load_sdk
 
-logger = logging.getLogger(__name__)
-
-_SDK_ENV_VAR = "LINKERBOT_SDK_SRC"
-
-
-def _find_sdk_source() -> str | None:
-    """在预定义位置搜索 linkerbot SDK 源码目录。"""
-    candidates: list[str] = []
-
-    env_path = os.environ.get(_SDK_ENV_VAR, "")
-    if env_path:
-        candidates.append(env_path)
-
-    this_dir = os.path.dirname(os.path.realpath(__file__))
-    workspace_root = os.path.abspath(os.path.join(this_dir, "..", "..", ".."))
-    candidates.append(os.path.join(workspace_root, "src", "linkerbot-python-sdk", "src"))
-
-    d = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(10):
-        d = os.path.dirname(d)
-        sdk_candidate = os.path.join(d, "src", "linkerbot-python-sdk", "src")
-        if sdk_candidate not in candidates:
-            candidates.append(sdk_candidate)
-        if d == os.path.dirname(d):
-            break
-
-    for path in candidates:
-        if os.path.isdir(os.path.join(path, "linkerbot")):
-            return os.path.abspath(path)
-    return None
-
-
-def _ensure_sdk_importable() -> None:
-    """确保 ``import linkerbot`` 可以成功。"""
-    try:
-        import linkerbot  # noqa: F401
-        return
-    except ImportError:
-        pass
-
-    sdk_src = _find_sdk_source()
-    if sdk_src is None:
-        raise ImportError(
-            "linkerbot SDK 未找到。请通过以下任一方式提供：\n"
-            "  1. pip install linkerbot-py\n"
-            f"  2. 设置环境变量 {_SDK_ENV_VAR}=/path/to/linkerbot-python-sdk/src\n"
-            "  3. 初始化 git submodule: git submodule update --init src/linkerbot-python-sdk"
-        )
-    sys.path.insert(0, sdk_src)
-    logger.info("已将 linkerbot SDK 源码加入 sys.path: %s", sdk_src)
-
-
-_ensure_sdk_importable()
-
-from linkerbot import A7, A7lite, P7  # noqa: E402
+_sdk = load_sdk()
+A7, A7lite, P7 = _sdk.A7, _sdk.A7lite, _sdk.P7
 
 _ARM_CLASSES: dict[str, type] = {
     "a7": A7,
@@ -82,7 +23,7 @@ _ARM_CLASSES: dict[str, type] = {
 
 
 class LinkerBotSDKAdapter(ArmProtocol):
-    """将 linkerbot SDK (A7 / A7lite) 适配为 ArmProtocol 统一接口。
+    """将 linkerbot SDK (A7 / A7lite / P7) 适配为 ArmProtocol 统一接口。
 
     直接调用 SDK 创建实例，不做额外的 wake-up / verify / retry。
     SDK 创建失败则直接抛出异常，由 launch 的 respawn 机制处理重启。
@@ -167,5 +108,5 @@ class LinkerBotSDKAdapter(ArmProtocol):
 
     @property
     def raw_sdk(self):
-        """返回底层 SDK 实例（A7 或 A7lite），供高级用户直接调用 SDK 特有方法。"""
+        """返回底层 SDK 实例（A7、A7lite 或 P7），供高级用户直接调用 SDK 特有方法。"""
         return self._arm

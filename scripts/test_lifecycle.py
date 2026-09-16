@@ -22,12 +22,14 @@ import sys
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-WS_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
-SDK_SRC = os.path.join(WS_ROOT, "src", "linkerbot-python-sdk", "src")
-if os.path.isdir(os.path.join(SDK_SRC, "linkerbot")):
-    sys.path.insert(0, SDK_SRC)
+PACKAGE_ROOT = os.path.dirname(SCRIPT_DIR)
+if PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, PACKAGE_ROOT)
 
-from linkerbot import A7, A7lite  # noqa: E402
+from linker_arm_ros2.sdk_loader import load_sdk  # noqa: E402
+
+_sdk = load_sdk()
+A7, A7lite = _sdk.A7, _sdk.A7lite
 
 ARM_CLASSES = {"a7": A7, "a7lite": A7lite}
 NUM_JOINTS = 7
@@ -105,8 +107,8 @@ def test_state_read(arm, side, count=5):
             break
         try:
             angles = arm.get_angles()
-            velocities = arm.get_velocities()
-            torques = arm.get_torques()
+            arm.get_velocities()
+            arm.get_torques()
             print(f"    [{side}] #{i+1} pos={[f'{a:.3f}' for a in angles]}")
         except Exception as e:
             print(f"    [{side}] #{i+1} 读取失败: {e}")

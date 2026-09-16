@@ -6,7 +6,7 @@
 定义了 ROS2 通信层所需的全部机械臂操作接口，将 ROS2 节点与底层 SDK 实现彻底解耦。
 
 设计目的：
-  - linkerbot-python-sdk 持续迭代时，只需更新 sdk_adapter.py 中的适配代码，
+  - linkerbot-arm 持续迭代时，只需更新 sdk_adapter.py 中的适配代码，
     arm_node.py 和 launch 等上层文件无需改动。
   - 若未来需要接入其他品牌/型号的机械臂，只需实现一个新的 Adapter 即可。
   - 部署到数百台机器时，上层 ROS2 逻辑完全一致，仅 Adapter 层处理硬件差异。

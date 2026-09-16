@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""A7 / A7 Lite zero calibration tool using linkerbot-python-sdk directly.
+"""A7 / A7 Lite zero calibration tool using linkerbot-arm directly.
 
 Verification status:
     - A7 Lite: 真机验证 2 次通过，未出现异常。
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -23,13 +22,11 @@ from typing import Literal
 
 import yaml
 
-
 SCRIPT_PATH = Path(__file__).resolve()
 PACKAGE_ROOT = SCRIPT_PATH.parent.parent           # src/linker_arm_ros2
 WORKSPACE_ROOT = PACKAGE_ROOT.parent.parent        # workspace root
 DEFAULT_CONFIG_PATH = PACKAGE_ROOT / "config" / "arm_config.yaml"
 TASK_CONFIG_PATH = WORKSPACE_ROOT / "task_config.json"
-SDK_SRC_PATH = WORKSPACE_ROOT / "src" / "linkerbot-python-sdk" / "src"
 ARM_NODE_NAMES = ("/left_arm_node", "/right_arm_node")
 SIDES = ("left", "right")
 SUPPORTED_ARM_TYPES = ("a7", "a7lite")
@@ -139,30 +136,24 @@ def ensure_arm_nodes_stopped() -> None:
 
 
 def ensure_sdk_importable() -> None:
-    try:
-        import linkerbot  # noqa: F401
-        return
-    except ImportError:
-        pass
+    # Allow execution by absolute script path without installing the ROS2 package.
+    package_path = str(PACKAGE_ROOT)
+    if package_path not in sys.path:
+        sys.path.insert(0, package_path)
+    from linker_arm_ros2.sdk_loader import ensure_sdk_importable as load_sdk
 
-    if (SDK_SRC_PATH / "linkerbot").is_dir():
-        sys.path.insert(0, str(SDK_SRC_PATH))
-        return
-
-    raise ImportError(
-        f"linkerbot SDK 未找到。预期路径: {SDK_SRC_PATH}。"
-        "请确认 src/linkerbot-python-sdk 子模块已 checkout。"
-    )
+    load_sdk()
 
 
 def create_arm(arm_type: str, side: Literal["left", "right"], interface_name: str):
     ensure_sdk_importable()
+    from linker_arm_ros2.sdk_loader import load_sdk
+
+    sdk = load_sdk()
     if arm_type == "a7lite":
-        from linkerbot.arm import A7lite
-        return A7lite(side=side, interface_name=interface_name)
+        return sdk.A7lite(side=side, interface_name=interface_name)
     if arm_type == "a7":
-        from linkerbot.arm import A7
-        return A7(side=side, interface_name=interface_name)
+        return sdk.A7(side=side, interface_name=interface_name)
     raise ValueError(f"unsupported arm_type: {arm_type}")
 
 

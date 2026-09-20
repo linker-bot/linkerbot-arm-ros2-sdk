@@ -1,38 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""ROS2 communication node with cancellable lifecycle tasks.
+
+SDK construction and middleware setup finish before auto-enable/home starts.
+Lifecycle services await worker results without occupying the ROS executor;
+state publication continues while a normal task runs. A separate stop task
+cancels home, and streaming stays gated until an explicit successful home or
+enable. Shutdown cancels workers, attempts disable, then releases SDK resources.
+
+The 0.1/0.2/0.5 second waits retain existing command-drain allowances; they are
+not hardware acknowledgements. Physical stop timing remains SDK/backend-specific.
 """
-linker_arm_ros2 主节点 — ROS2 通信层。
 
-生命周期（auto_enable=true 时）：
-  1. 创建 SDK 实例（自动检查 7 个电机通信）
-  2. disable → 0.1s → enable → 0.2s（清除旧状态后使能，等待确保 CAN 帧到达）
-  3. 设置慢速 → home(blocking=True) 阻塞回零
-  4. 进入控制循环：
-     - 无控制指令时：发布状态
-     - 有控制指令时：set_angles() 流式下发 + 发布状态
-  5. Ctrl+C → disable → 0.5s → close（等待确保 disable 帧发送完毕）
-
-流式控制使用 set_angles()（直接下发电机目标角度），
-而非 move_j()（有 motion guard，不支持高频调用）。
-电机按其 PP 模式内置的 velocity/acceleration profile 追踪目标。
-
-等待时间（0.1s / 0.2s / 0.5s）用于保证 CAN 帧在 ROS2 多线程环境下可靠发送，
-同时适用于 A7 和 A7Lite。
-
-依赖关系：
-  arm_node.py → arm_factory.py → sdk_adapter.py → linkerbot SDK
-"""
 from __future__ import annotations
 
+import threading
 import time
 
 import rclpy
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 
 from linker_arm_ros2.arm_factory import create_arm
 from linker_arm_ros2.arm_protocol import ArmProtocol
+from linker_arm_ros2.lifecycle_tasks import LifecycleTasks, TaskCancelled
 
 NUM_JOINTS = 7
 _MOTOR_IDS = {
@@ -42,10 +35,30 @@ _MOTOR_IDS = {
 
 
 class ArmNode(Node):
-
     def __init__(self):
         super().__init__("arm_node")
 
+        self.arm = None
+        self.enabled = False
+        self._may_be_enabled = False
+        self._halted = False
+        self._connection_closed = False
+        self._destroyed = False
+        self._command_lock = threading.RLock()
+        self._tasks = LifecycleTasks()
+        self._service_group = ReentrantCallbackGroup()
+        try:
+            self._initialize()
+        except BaseException:
+            try:
+                self.destroy_node()
+            except BaseException as cleanup_error:
+                self.get_logger().error(
+                    f"Initialization cleanup failed: {cleanup_error}"
+                )
+            raise
+
+    def _initialize(self):
         # ── 参数（由 arm_config.yaml 通过 launch 注入）──────────────
         self.declare_parameter("arm_type", "a7")
         self.declare_parameter("side", "left")
@@ -68,7 +81,9 @@ class ArmNode(Node):
         self.publish_rate = self.get_parameter("publish_rate").value
         self.cmd_timeout = self.get_parameter("cmd_timeout").value
         self.auto_enable = self.get_parameter("auto_enable").value
-        self.calibrate_zero_on_startup = self.get_parameter("calibrate_zero_on_startup").value
+        self.calibrate_zero_on_startup = self.get_parameter(
+            "calibrate_zero_on_startup"
+        ).value
         self.world_frame = self.get_parameter("world_frame").value
         self.tcp_offset = list(self.get_parameter("tcp_offset").value)
         self.slow_max_velocity = self.get_parameter("slow_max_velocity").value
@@ -103,31 +118,6 @@ class ArmNode(Node):
             f"can={self.can_interface}"
         )
 
-        # ── Step 2: 标定零位（可选）+ 使能 + 慢速回零 ────────────────
-        if self.calibrate_zero_on_startup:
-            self.arm.calibrate_zero()
-            time.sleep(2.0)
-            self.get_logger().info(
-                "Zero calibration completed (waited 2s for Flash write)"
-            )
-
-        if self.auto_enable:
-            self.arm.disable()
-            time.sleep(0.1)
-            self.arm.enable()
-            time.sleep(0.2)
-            self.enabled = True
-            self.get_logger().info("Arm enabled")
-
-            self._apply_position_kps()
-
-            self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
-            self.get_logger().info(
-                f"Homing at slow speed ({self.slow_max_velocity} rad/s)..."
-            )
-            self.arm.home(blocking=True)
-            self.get_logger().info("Home completed, entering control loop")
-
         # ── Publisher / Subscriber ─────────────────────────────────
         state_topic = f"{self.side}_arm_joint_state"
         control_topic = f"{self.side}_arm_joint_control"
@@ -141,16 +131,38 @@ class ArmNode(Node):
         self.create_timer(1.0 / self.publish_rate, self._control_loop)
 
         # ── Services ───────────────────────────────────────────────
-        self.create_service(Trigger, "~/enable", self._srv_enable)
-        self.create_service(Trigger, "~/disable", self._srv_disable)
-        self.create_service(Trigger, "~/home", self._srv_home)
-        self.create_service(Trigger, "~/emergency_stop", self._srv_emergency_stop)
-        self.create_service(Trigger, "~/reset_error", self._srv_reset_error)
-        self.create_service(Trigger, "~/calibrate_zero", self._srv_calibrate_zero)
-
-        self.get_logger().info(
-            f"ArmNode ready: pub={state_topic}, sub={control_topic}"
+        self.create_service(
+            Trigger, "~/enable", self._srv_enable, callback_group=self._service_group
         )
+        self.create_service(
+            Trigger, "~/disable", self._srv_disable, callback_group=self._service_group
+        )
+        self.create_service(
+            Trigger, "~/home", self._srv_home, callback_group=self._service_group
+        )
+        self.create_service(
+            Trigger,
+            "~/emergency_stop",
+            self._srv_emergency_stop,
+            callback_group=self._service_group,
+        )
+        self.create_service(
+            Trigger,
+            "~/reset_error",
+            self._srv_reset_error,
+            callback_group=self._service_group,
+        )
+        self.create_service(
+            Trigger,
+            "~/calibrate_zero",
+            self._srv_calibrate_zero,
+            callback_group=self._service_group,
+        )
+
+        self.get_logger().info(f"ArmNode ready: pub={state_topic}, sub={control_topic}")
+        # Services and state publishing exist before any enable/home task starts.
+        if self.auto_enable or self.calibrate_zero_on_startup:
+            self._tasks.submit(self._startup)
 
     # ================================================================
     # 控制循环
@@ -158,10 +170,17 @@ class ArmNode(Node):
 
     def _control_loop(self):
         self._publish_state()
-        if self.enabled and self.has_first_cmd:
-            self._update_speed_mode()
+        if self._command_lock.acquire(blocking=False):
+            try:
+                if not self._tasks.busy and not self._halted:
+                    if self.enabled and self.has_first_cmd:
+                        self._update_speed_mode()
+            finally:
+                self._command_lock.release()
 
     def _publish_state(self):
+        if self._connection_closed:
+            return
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = self.joint_names
@@ -204,6 +223,17 @@ class ArmNode(Node):
     # ================================================================
 
     def _cmd_callback(self, msg: JointState):
+        # Never wait behind a lifecycle SDK call on the ROS executor thread.
+        if not self._command_lock.acquire(blocking=False):
+            return
+        try:
+            if self._tasks.busy or self._halted or self._connection_closed:
+                return
+            self._accept_command(msg)
+        finally:
+            self._command_lock.release()
+
+    def _accept_command(self, msg: JointState):
         if not self.enabled:
             self.get_logger().warn(
                 "Received command but arm is not enabled, ignoring",
@@ -260,134 +290,205 @@ class ArmNode(Node):
         self.arm.set_position_kps([self.position_kp] * NUM_JOINTS)
         self.get_logger().info(f"A7 Lite position KP set to {self.position_kp}")
 
-    def _srv_enable(self, request, response):
-        try:
-            self.arm.disable()
-            time.sleep(0.1)
+    def _check_task(self, cancel):
+        if cancel.is_set() or self._destroyed:
+            raise TaskCancelled("Lifecycle operation cancelled")
+        if self._connection_closed:
+            raise RuntimeError("SDK connection is closed; restart the node")
+
+    def _task_call(self, cancel, operation, *args):
+        with self._command_lock:
+            self._check_task(cancel)
+            return operation(*args)
+
+    def _pause(self, cancel, duration):
+        if cancel.wait(duration):
+            raise TaskCancelled("Lifecycle operation cancelled")
+        self._check_task(cancel)
+
+    def _reset_command_state(self):
+        self.has_first_cmd = False
+        self.normal_speed_active = False
+        self.first_cmd_time = None
+        self.last_cmd_time = None
+
+    def _home(self, cancel):
+        self._task_call(
+            cancel, self.arm.set_velocities, [self.slow_max_velocity] * NUM_JOINTS
+        )
+        self._check_task(cancel)
+        # SDK cancellation guards admission even if stop arrives just before
+        # home enters the SDK, and cancels P7's host-streamed waypoints.
+        self.arm.home_cancellable(cancel)
+        with self._command_lock:
+            self._check_task(cancel)
+            self._reset_command_state()
+            self._halted = False
+        return f"{self.side} arm homed"
+
+    def _enable(self, cancel):
+        self._task_call(cancel, self.arm.disable)
+        self.enabled = False
+        self._pause(cancel, 0.1)
+        with self._command_lock:
+            self._check_task(cancel)
+            # enable can fail after sending only some joints' frames.
+            self._may_be_enabled = True
             self.arm.enable()
-            time.sleep(0.2)
             self.enabled = True
-            self._apply_position_kps()
-            self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
-            self.arm.home(blocking=True)
-            response.success = True
-            response.message = f"{self.side} arm enabled and homed"
-            self.get_logger().info(response.message)
-        except Exception as e:
-            response.success = False
-            response.message = str(e)
-            self.get_logger().error(f"Enable failed: {e}")
-        return response
+        self._pause(cancel, 0.2)
+        self._task_call(cancel, self._apply_position_kps)
+        self._home(cancel)
+        return f"{self.side} arm enabled and homed"
 
-    def _srv_disable(self, request, response):
+    def _calibrate(self, cancel):
+        if self.enabled or self._may_be_enabled:
+            raise RuntimeError("Arm must be disabled before calibrating zero")
+        self._task_call(cancel, self.arm.calibrate_zero)
+        self._pause(cancel, 2.0)
+        return f"{self.side} arm zero calibrated"
+
+    def _startup(self, cancel):
         try:
-            self.arm.disable()
-            self.enabled = False
-            self.has_first_cmd = False
-            self.normal_speed_active = False
-            response.success = True
-            response.message = f"{self.side} arm disabled"
-            self.get_logger().info(response.message)
-        except Exception as e:
-            response.success = False
-            response.message = str(e)
-            self.get_logger().error(f"Disable failed: {e}")
+            if self.calibrate_zero_on_startup:
+                self._calibrate(cancel)
+            if self.auto_enable:
+                self._enable(cancel)
+            self.get_logger().info("Startup completed")
+            return "Startup completed"
+        except BaseException as error:
+            if not cancel.is_set():
+                self.get_logger().error(f"Startup failed: {error}")
+                try:
+                    self._close_connection()
+                except BaseException:
+                    pass  # _close_connection logged the secondary error; preserve cause.
+            raise
+
+    async def _service_task(self, response, operation, *, stop=False):
+        success, message = await self._tasks.submit(operation, stop=stop)
+        response.success = success
+        response.message = message
+        if not success:
+            self.get_logger().warn(message)
         return response
 
-    def _srv_home(self, request, response):
-        if not self.enabled:
-            response.success = False
-            response.message = "Arm is not enabled"
-            return response
-        try:
-            self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
-            self.arm.home(blocking=True)
-            self.has_first_cmd = False
-            self.normal_speed_active = False
-            response.success = True
-            response.message = f"{self.side} arm homed"
-            self.get_logger().info(response.message)
-        except Exception as e:
-            response.success = False
-            response.message = str(e)
-            self.get_logger().error(f"Home failed: {e}")
-        return response
+    async def _srv_enable(self, request, response):
+        def enable(cancel):
+            try:
+                return self._enable(cancel)
+            except BaseException:
+                if not cancel.is_set():
+                    try:
+                        self._close_connection()
+                    except BaseException:
+                        pass  # Keep the enable failure as the service response.
+                raise
 
-    def _srv_emergency_stop(self, request, response):
-        try:
-            self.arm.emergency_stop()
-            response.success = True
-            response.message = f"{self.side} arm emergency stopped"
-            self.get_logger().warn(response.message)
-        except Exception as e:
-            response.success = False
-            response.message = str(e)
-            self.get_logger().error(f"Emergency stop failed: {e}")
-        return response
+        return await self._service_task(response, enable)
 
-    def _srv_reset_error(self, request, response):
-        try:
-            self.arm.reset_error()
-            response.success = True
-            response.message = f"{self.side} arm errors reset"
-            self.get_logger().info(response.message)
-        except Exception as e:
-            response.success = False
-            response.message = str(e)
-            self.get_logger().error(f"Reset error failed: {e}")
-        return response
+    async def _srv_home(self, request, response):
+        def home(cancel):
+            if not self.enabled:
+                raise RuntimeError("Arm is not enabled")
+            return self._home(cancel)
 
-    def _srv_calibrate_zero(self, request, response):
-        if self.enabled:
-            response.success = False
-            response.message = "Arm must be disabled before calibrating zero"
-            return response
-        try:
-            self.arm.calibrate_zero()
-            time.sleep(2.0)
-            response.success = True
-            response.message = f"{self.side} arm zero calibrated (waited 2s for Flash write)"
-            self.get_logger().info(response.message)
-        except Exception as e:
-            response.success = False
-            response.message = str(e)
-            self.get_logger().error(f"Calibrate zero failed: {e}")
-        return response
+        return await self._service_task(response, home)
 
-    # ================================================================
-    # 节点销毁 (Ctrl+C)
-    # ================================================================
+    def _stop(self, cancel, *, disable):
+        with self._command_lock:
+            self._check_task(cancel)
+            self._halted = True
+            self._reset_command_state()
+            if disable:
+                self.arm.disable()
+                self.enabled = False
+                self._may_be_enabled = False
+            else:
+                self.arm.emergency_stop()
+        return f"{self.side} arm {'disabled' if disable else 'emergency stopped'}"
+
+    async def _srv_disable(self, request, response):
+        return await self._service_task(
+            response, lambda cancel: self._stop(cancel, disable=True), stop=True
+        )
+
+    async def _srv_emergency_stop(self, request, response):
+        return await self._service_task(
+            response, lambda cancel: self._stop(cancel, disable=False), stop=True
+        )
+
+    async def _srv_reset_error(self, request, response):
+        def reset(cancel):
+            self._task_call(cancel, self.arm.reset_error)
+            return f"{self.side} arm errors reset"
+
+        return await self._service_task(response, reset)
+
+    async def _srv_calibrate_zero(self, request, response):
+        return await self._service_task(response, self._calibrate)
+
+    def _close_connection(self):
+        with self._command_lock:
+            if self.arm is None or self._connection_closed:
+                return
+            self._halted = True
+            try:
+                if self.enabled or self._may_be_enabled:
+                    self.arm.disable()
+                    self.enabled = False
+                    self._may_be_enabled = False
+                    time.sleep(0.5)
+            except BaseException as error:
+                self.get_logger().error(f"Disable during cleanup failed: {error}")
+            try:
+                self.arm.close()
+            except BaseException as error:
+                self.get_logger().error(f"SDK close failed; cleanup can retry: {error}")
+                raise
+            self._connection_closed = True
 
     def destroy_node(self):
-        self.get_logger().info("Shutting down: disable → close...")
+        if self._destroyed:
+            self._close_connection()
+            return
+        self._destroyed = True
+        tasks = self._tasks.cancel_for_shutdown()
         try:
-            if self.enabled:
-                self.arm.disable()
-                self.get_logger().info("Arm disabled")
-        except Exception:
-            pass
-        time.sleep(0.5)
-        try:
-            self.arm.close()
-            self.get_logger().info("SDK connection closed")
-        except Exception:
-            pass
-        super().destroy_node()
+            # Cancel the SDK motion wait/stream before joining the lifecycle task.
+            with self._command_lock:
+                if self.arm is not None and not self._connection_closed:
+                    if self.enabled or self._may_be_enabled:
+                        try:
+                            self.arm.disable()
+                            self.enabled = False
+                            self._may_be_enabled = False
+                            time.sleep(0.5)
+                        except BaseException as error:
+                            self.get_logger().error(f"Shutdown disable failed: {error}")
+            try:
+                self._tasks.join(tasks)
+            finally:
+                self._close_connection()
+        finally:
+            super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ArmNode()
+    node = None
     try:
+        node = ArmNode()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
         try:
-            rclpy.shutdown()
-        except Exception:
-            pass
+            if node is not None:
+                node.destroy_node()
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()
 
 
 if __name__ == "__main__":

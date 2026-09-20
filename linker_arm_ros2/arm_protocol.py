@@ -17,6 +17,8 @@
        ├── LinkerBotSDKAdapter  (linkerbot SDK 适配器，见 sdk_adapter.py)
        └── 其他 Adapter ...     (未来可扩展)
 """
+
+import threading
 from abc import ABC, abstractmethod
 
 
@@ -58,6 +60,10 @@ class ArmProtocol(ABC):
     @abstractmethod
     def home(self, *, blocking: bool = True) -> None:
         """回零：将所有关节移动到零位 [0, 0, 0, 0, 0, 0, 0]。"""
+
+    def home_cancellable(self, cancel_event: threading.Event) -> None:
+        """生命周期任务回零；适配器必须显式支持合作取消，不能退回阻塞回零。"""
+        raise NotImplementedError("This adapter does not support cancellable home")
 
     @abstractmethod
     def emergency_stop(self) -> None:

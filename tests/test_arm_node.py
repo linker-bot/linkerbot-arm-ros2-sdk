@@ -5,6 +5,7 @@ from unittest.mock import create_autospec
 import pytest
 
 rclpy = pytest.importorskip("rclpy")
+from rclpy.executors import SingleThreadedExecutor
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 
@@ -55,12 +56,23 @@ def test_node_adapter_sdk_call_chain(monkeypatch, arm_type, side, channel):
         message.position = [0.1] * 7
         node._cmd_callback(message)
         arm._set_angles.assert_called_once_with([0.1] * 7)
-        response = node._srv_home(Trigger.Request(), Trigger.Response())
-        assert response.success
-        arm.home.assert_called_once_with(blocking=True)
-        response = node._srv_emergency_stop(Trigger.Request(), Trigger.Response())
-        assert response.success
-        arm.emergency_stop.assert_called_once()
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        try:
+            future = executor.create_task(
+                node._srv_home(Trigger.Request(), Trigger.Response())
+            )
+            executor.spin_until_future_complete(future, timeout_sec=2.0)
+            assert future.result().success
+            arm.home_cancellable.assert_called_once()
+            future = executor.create_task(
+                node._srv_emergency_stop(Trigger.Request(), Trigger.Response())
+            )
+            executor.spin_until_future_complete(future, timeout_sec=2.0)
+            assert future.result().success
+            arm.emergency_stop.assert_called_once()
+        finally:
+            executor.shutdown()
     finally:
         if node is not None:
             node.destroy_node()

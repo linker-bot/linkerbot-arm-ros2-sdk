@@ -82,3 +82,25 @@ def test_sdk_errors_reach_callers(monkeypatch):
     monkeypatch.setitem(sdk_adapter._ARM_CLASSES, "a7", cls)
     with pytest.raises(ValueError, match="invalid angle"):
         create_arm("a7", "left", "can0").set_angles([99.0] * 7)
+
+
+def test_old_sdk_is_rejected_before_opening_or_enabling(monkeypatch):
+    class OldSDK:
+        def __init__(self, **kwargs):
+            pytest.fail("Incompatible SDK must be rejected before opening CAN")
+
+    monkeypatch.setitem(sdk_adapter._ARM_CLASSES, "a7", OldSDK)
+    with pytest.raises(RuntimeError, match="cancellable home support"):
+        create_arm("a7", "left", "can0")
+
+
+@pytest.mark.parametrize("arm_type", ["a7", "a7lite", "p7"])
+def test_cancellable_home_passes_the_same_signal(monkeypatch, arm_type):
+    import threading
+
+    cls = create_autospec(sdk_adapter._ARM_CLASSES[arm_type])
+    monkeypatch.setitem(sdk_adapter._ARM_CLASSES, arm_type, cls)
+    arm = create_arm(arm_type, "left", "can0")
+    cancel = threading.Event()
+    arm.home_cancellable(cancel)
+    cls.return_value.home_cancellable.assert_called_once_with(cancel)

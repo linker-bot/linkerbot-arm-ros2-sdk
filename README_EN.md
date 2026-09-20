@@ -153,7 +153,7 @@ When `auto_enable: true`, the node executes this sequence on startup:
 4. enable() → reset_error + set_control_mode(PP) + enable motors
 5. Wait 0.2s → ensure all motors complete enable
 6. set_velocities(slow) → set slow speed
-7. home(blocking=True) → block until homing complete
+7. Run cancellable home in a worker; admit streaming only after completion
 8. Enter control loop → publish state at 100Hz
 9. On control command → set_angles() streaming
 10. Ctrl+C → disable() → wait 0.5s → close()
@@ -198,10 +198,21 @@ All services use `std_srvs/srv/Trigger`, namespaced under the node name.
 |---------|-------------|
 | `~/enable` | Enable all 7 motors + slow-speed homing |
 | `~/disable` | Disable all 7 motors |
-| `~/home` | Home: slow-speed move to zero (blocking) |
-| `~/emergency_stop` | Emergency stop — locks arm at current position |
+| `~/home` | Cancellable slow homing; responds on completion while state and other services remain available |
+| `~/emergency_stop` | Cancel homing and call the SDK software stop; gate subsequent streaming |
 | `~/reset_error` | Reset motor error states |
 | `~/calibrate_zero` | Set current position as zero (arm must be disabled first) |
+
+Lifecycle services keep the existing `Trigger` type and respond when the operation
+returns. One normal task runs at a time; overlapping normal requests return busy.
+Disable/emergency-stop cancels the active home, whose response reports failure.
+State publishing continues. Streaming resumes only after a successful explicit
+home or enable. SDK/backend latency still applies to software stop calls.
+
+Startup/enable failures attempt disable and close; a closed connection requires a
+node restart. Install the exact arm/transport sources in
+`requirements/source-versions.txt`; older SDKs are rejected before opening CAN.
+Matching version numbers alone do not identify this unreleased source baseline.
 
 ## Parameters
 

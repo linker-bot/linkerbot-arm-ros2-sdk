@@ -1,0 +1,4 @@
+# Source baseline for cancellable ROS2 lifecycle tasks; no release is implied.
+# Update to final main/master SHAs after the prerequisite PRs are squash-merged.
+linkerbot-transport[can] @ git+ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-transport.git@2f5ce053bf92897a7fc22f4349f5020bd0ae1955
+linkerbot-arm @ git+ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-arm.git@d6d9fc0937e93aa2a77486671fef8de3120b7e6c

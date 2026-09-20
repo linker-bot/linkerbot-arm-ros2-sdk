@@ -22,31 +22,26 @@ source /opt/ros/jazzy/setup.bash
 source /path/to/ros-arm-venv/bin/activate
 ```
 
-transport 位于公司 Gitea。使用已有 SSH 权限安装已验证的 1.0.0 源码：
+当前节点的可取消生命周期需要配套的 arm/transport 源码。使用已有 SSH 权限安装本仓库
+`requirements/source-versions.txt` 固定的提交；版本号相同的旧 wheel 可能不包含所需能力。
 
 ```bash
-python -m pip install 'linkerbot-transport[can] @ git+ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-transport.git@e8c8bf7cc424cffa0234e659537c64f102b22426'
-```
-
-已有公司包源认证时，也可以安装发布 wheel：
-
-```bash
-python -m pip install --index-url https://gitea.linkerhub.work/api/packages/zhuzhixiang/pypi/simple \
-  --extra-index-url https://pypi.org/simple 'linkerbot-transport[can]==1.0.0'
-```
-
-包源凭据使用已有 pip/keyring/netrc 配置。arm 0.6.x 源码可从独立仓库获取：
-
-```bash
+# arm checkout 提供与系统 ROS2 二进制库匹配的约束文件。
 git clone ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-arm.git /path/to/linkerbot-arm
-git -C /path/to/linkerbot-arm checkout 09088e0bcfaceecd276736a5c10b8192862319f2
-python -m pip install -c /path/to/linkerbot-arm/constraints/ros2.txt -e /path/to/linkerbot-arm
+git -C /path/to/linkerbot-arm checkout d6d9fc0937e93aa2a77486671fef8de3120b7e6c
+python -m pip install -c /path/to/linkerbot-arm/constraints/ros2.txt \
+  -r /path/to/linker_arm_ros2/requirements/source-versions.txt
 python -m pip install colcon-common-extensions
 ```
 
-这里固定已验证的 arm 0.6.0 源码提交，不假定该版本已经上传包源。已有正式发行 wheel 时，
-也可在同一环境安装匹配版本的 wheel。`constraints/ros2.txt` 将 NumPy 限制为 1.x、SciPy
-限制为兼容区间，供采用 NumPy 1.x 系统二进制库的部署使用；实际 ABI 兼容性须由下方导入和模型检查确认。
+也可将 transport 和 arm 分别检出到清单中的提交，在同一 Python 环境先后执行
+`pip install -e /path/to/linkerbot-transport` 和 `pip install -e /path/to/linkerbot-arm`，
+并使用适合当前 ROS2 二进制环境的约束。节点在创建 SDK 对象前检查 `home_cancellable`，
+缺少时明确提示更新，不会打开 CAN 或尝试旧的不可取消回零。
+
+`constraints/ros2.txt` 将 NumPy 限制为 1.x、SciPy 限制为兼容区间，供采用 NumPy 1.x
+系统二进制库的部署使用。自行安装 Pinocchio wheel 的环境应使用与其 ABI 匹配的依赖；
+实际兼容性须由下方导入和模型检查确认。本轮不要求发版。
 
 在当前环境中用 colcon 构建，生成的节点入口才会使用该环境的 Python：
 
@@ -82,7 +77,8 @@ workspace/src/linkerbot-arm/
 `LINKERBOT_SDK_SRC` → 附近的独立 `linkerbot-arm` 仓库。
 
 旧变量保留一个过渡周期，使用时输出迁移提示。它可以指向新的独立 arm 源码，或临时显式
-指定旧完整 SDK 源码；后者加载 `linkerbot.arm`，仅用于过渡。推荐改为新变量并指向独立仓库。
+指定旧完整 SDK 源码供 loader 解析；当前节点仍要求可取消回零能力，未同步该能力的旧 SDK
+会被拒绝。推荐改为新变量并指向清单中的独立 arm 源码。
 旧 `linkerbot-python-sdk` 不再自动查找，环境中已安装的旧 `linkerbot` 也不作为自动回退来源。
 
 显式路径无效时直接报错；SDK 内部缺少依赖时保留原始异常。环境变量不会覆盖已经可导入的

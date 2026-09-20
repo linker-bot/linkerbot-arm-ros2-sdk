@@ -4,6 +4,7 @@
 
 SDK discovery is shared with standalone tools through sdk_loader.
 """
+
 from typing import Literal
 
 from .arm_protocol import ArmProtocol
@@ -42,6 +43,11 @@ class LinkerBotSDKAdapter(ArmProtocol):
             raise ValueError(
                 f"不支持的 arm_type '{arm_type}'，可选：{list(_ARM_CLASSES)}"
             )
+        if not callable(getattr(cls, "home_cancellable", None)):
+            raise RuntimeError(
+                "Install linkerbot-arm source with cancellable home support "
+                "from requirements/source-versions.txt before starting this node"
+            )
 
         self._arm = cls(side=side, interface_name=interface_name, **kwargs)
         self._arm_type = arm_type_lower
@@ -67,6 +73,14 @@ class LinkerBotSDKAdapter(ArmProtocol):
 
     def home(self, *, blocking: bool = True) -> None:
         self._arm.home(blocking=blocking)
+
+    def home_cancellable(self, cancel_event) -> None:
+        method = getattr(self._arm, "home_cancellable", None)
+        if method is None:
+            raise RuntimeError(
+                "Install linkerbot-arm source with cancellable home support"
+            )
+        method(cancel_event)
 
     def emergency_stop(self) -> None:
         self._arm.emergency_stop()

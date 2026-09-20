@@ -153,14 +153,13 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 4. enable() → 使能电机（内部自动 reset_error + set_control_mode(PP) + enable）
 5. 等待 0.2s → 确保所有电机完成使能
 6. set_velocities(slow) → 设置慢速
-7. home(blocking=True) → 阻塞等待回零完成
-8. 进入控制循环 → 100Hz 发布状态
+7. 后台执行可取消回零 → 任务完成后开放流式控制
+8. 状态发布和服务在启动任务前就已建立，回零期间继续运行
 9. 收到控制指令 → set_angles() 流式下发
-10. Ctrl+C → disable() → 等待 0.5s → close()
+10. Ctrl+C → 取消任务 → disable() → 等待退出及发送余量 → close()
 ```
 
-> 步骤 3、5、10 的等待时间是为了确保 CAN 帧发送完成，避免因 ROS2 多线程环境导致的时序问题。
-> 此策略同时适用于 A7 和 A7Lite 机械臂。
+> 步骤 3、5、10 保留发送等待余量，不等同于设备确认；适用于 A7、A7lite 和 P7。
 
 ### 速度管理策略
 
@@ -196,10 +195,19 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 |------|------|
 | `~/enable` | 使能所有 7 个关节电机 + 慢速回零 |
 | `~/disable` | 失能所有 7 个关节电机 |
-| `~/home` | 回零：慢速移动到零位（阻塞等待完成） |
-| `~/emergency_stop` | 急停：立即停止运动，锁定当前位姿 |
+| `~/home` | 可取消的慢速回零；完成后返回结果，期间其他服务和状态发布可执行 |
+| `~/emergency_stop` | 取消当前回零任务并调用 SDK 软件停止；完成后暂停流式目标接收 |
 | `~/reset_error` | 重置电机错误状态 |
 | `~/calibrate_zero` | 零位标定：将当前位置设为零位（需先失能） |
+
+任务执行期间，重复的使能/回零/标定请求返回 busy，不排队执行；流式目标暂不接受。
+`disable` / `emergency_stop` 可以取消当前任务，被取消的原请求返回 `success=false`。
+服务仍使用原来的 `Trigger` 类型，成功响应表示操作已返回，不是仅进入后台队列。
+停止后，显式使能或回零成功才恢复流式控制。软件停止仍受 SDK、CAN 排队和驱动耗时影响。
+
+启动或使能失败会尝试失能并关闭 SDK，记录具体错误；关闭连接后需重启节点。
+可取消回零依赖本仓库 `requirements/source-versions.txt` 指定的 arm/transport 源码，
+仅有相同版本号不代表代码一致。旧 SDK 会在打开 CAN 前被拒绝，见[环境配置](docs/environment_setup.md)。
 
 ## 参数说明
 
@@ -303,7 +311,7 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 4. ROS2 仓库旁或祖先工作空间 `src/` 下的 `linkerbot-arm`。
 
 旧完整 SDK 目录不再自动查找，也不会自动改用环境中已安装的旧 `linkerbot`。
-旧变量可临时指向旧完整 SDK 的源码；新变量只接受 `linkerbot_arm` 命名空间。
+旧变量仍可解析旧完整 SDK 的源码；当前节点另要求可取消回零能力，未同步该能力的旧 SDK 无法启动节点。新变量只接受 `linkerbot_arm` 命名空间。
 显式路径无效或 SDK 缺少依赖时会报出对应错误，不会静默加载另一份源码。
 环境变量不会覆盖已可导入的独立 arm 包；切换来源后重启 Python 进程。
 

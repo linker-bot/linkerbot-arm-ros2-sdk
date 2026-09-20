@@ -28,7 +28,7 @@ source /path/to/ros-arm-venv/bin/activate
 ```bash
 # arm checkout 提供与系统 ROS2 二进制库匹配的约束文件。
 git clone ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-arm.git /path/to/linkerbot-arm
-git -C /path/to/linkerbot-arm checkout d6d9fc0937e93aa2a77486671fef8de3120b7e6c
+git -C /path/to/linkerbot-arm checkout 5be7da2d85d2add3ffe3f31d335d215b12a92e4a
 python -m pip install -c /path/to/linkerbot-arm/constraints/ros2.txt \
   -r /path/to/linker_arm_ros2/requirements/source-versions.txt
 python -m pip install colcon-common-extensions

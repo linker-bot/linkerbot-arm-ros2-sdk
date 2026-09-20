@@ -14,6 +14,7 @@ not hardware acknowledgements. Physical stop timing remains SDK/backend-specific
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 
@@ -91,6 +92,8 @@ class ArmNode(Node):
         self.startup_delay = self.get_parameter("startup_delay").value
         self.filter_window = self.get_parameter("filter_window").value
         self.position_kp = float(self.get_parameter("position_kp").value)
+        if not isinstance(self.filter_window, int) or self.filter_window < 1:
+            raise ValueError("filter_window must be a positive integer")
 
         # ── 关节名称（与电机 CAN ID 一致）──────────────────────────
         self.joint_names = [str(mid) for mid in _MOTOR_IDS[self.side]]
@@ -101,6 +104,8 @@ class ArmNode(Node):
         self.first_cmd_time = None
         self.last_cmd_time = None
         self.normal_speed_active = False
+        self._speed_recovery_pending = False
+        self._slow_speed_ready = False
 
         self._filter_buffers: list[list[float]] = [[] for _ in range(NUM_JOINTS)]
         self._filter_sums: list[float] = [0.0] * NUM_JOINTS
@@ -195,28 +200,50 @@ class ArmNode(Node):
             return
         self.state_pub.publish(msg)
 
+    def _set_speed_mode(self, *, normal):
+        velocity = self.normal_max_velocity if normal else self.slow_max_velocity
+        try:
+            self.arm.set_velocities([velocity] * NUM_JOINTS)
+        except Exception as error:
+            # A multi-joint speed write may have partially succeeded. Before
+            # admitting another target, restore slow speed for every joint.
+            self._speed_recovery_pending = True
+            self._slow_speed_ready = False
+            self.get_logger().error(
+                f"Speed update failed; target admission waits for slow-speed retry: {error}",
+                throttle_duration_sec=1.0,
+            )
+            return False
+        self.normal_speed_active = normal
+        self._slow_speed_ready = not normal
+        return True
+
     def _update_speed_mode(self):
         now = self.get_clock().now()
         time_since_last_cmd = (now - self.last_cmd_time).nanoseconds / 1e9
 
+        if self._speed_recovery_pending:
+            if self._set_speed_mode(normal=False):
+                self._reset_command_state()
+            return
+
         if time_since_last_cmd >= self.cmd_timeout:
             if self.normal_speed_active:
+                if not self._set_speed_mode(normal=False):
+                    return
                 self.get_logger().warn(
-                    f"No command for {time_since_last_cmd:.1f}s, switching to slow speed"
+                    f"No accepted command for {time_since_last_cmd:.1f}s, switching to slow speed"
                 )
-                self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
-                self.normal_speed_active = False
-            self.has_first_cmd = False
+            self._reset_command_state()
             return
 
         time_since_first_cmd = (now - self.first_cmd_time).nanoseconds / 1e9
         if not self.normal_speed_active and time_since_first_cmd >= self.startup_delay:
-            self.normal_speed_active = True
-            self.arm.set_velocities([self.normal_max_velocity] * NUM_JOINTS)
-            self.get_logger().info(
-                f"Startup delay elapsed, switching to normal speed "
-                f"({self.normal_max_velocity} rad/s)"
-            )
+            if self._set_speed_mode(normal=True):
+                self.get_logger().info(
+                    f"Startup delay elapsed, switching to normal speed "
+                    f"({self.normal_max_velocity} rad/s)"
+                )
 
     # ================================================================
     # 指令回调
@@ -248,36 +275,80 @@ class ArmNode(Node):
             )
             return
 
-        filtered = self._apply_filter(positions)
+        for index, position in enumerate(positions, 1):
+            if not math.isfinite(position):
+                self.get_logger().error(
+                    f"Joint {index} target must be finite, got {position}",
+                    throttle_duration_sec=1.0,
+                )
+                return
+
+        # Also handle a command arriving after timeout but before the timer.
+        now = self.get_clock().now()
+        restarting = (
+            not self.has_first_cmd
+            or self._speed_recovery_pending
+            or (now - self.last_cmd_time).nanoseconds / 1e9 >= self.cmd_timeout
+        )
+        try:
+            filtered, buffers, sums = self._prepare_filter(positions, reset=restarting)
+        except ValueError as error:
+            self.get_logger().error(str(error), throttle_duration_sec=1.0)
+            return
+
+        # Speed configuration precedes the first/recovery target. These two SDK
+        # calls are not atomic: success here means admission, not a motor ACK.
+        if restarting and (not self._slow_speed_ready or self.normal_speed_active):
+            if not self._set_speed_mode(normal=False):
+                return
         try:
             self.arm.set_angles(filtered)
-        except Exception as e:
+        except Exception as error:
             self.get_logger().error(
-                f"set_angles failed: {e}", throttle_duration_sec=1.0
+                f"set_angles rejected command: {error}", throttle_duration_sec=1.0
             )
+            return
 
+        # Commit only a target accepted by the SDK. Rejected messages neither
+        # enter filter history nor extend the valid-command timeout.
+        self._filter_buffers, self._filter_sums = buffers, sums
+        self._speed_recovery_pending = False
         now = self.get_clock().now()
-        if not self.has_first_cmd:
+        if restarting:
             self.has_first_cmd = True
             self.first_cmd_time = now
-            self.normal_speed_active = False
-            self.arm.set_velocities([self.slow_max_velocity] * NUM_JOINTS)
             self.get_logger().info(
-                f"First command received, slow speed for {self.startup_delay}s"
+                f"First command accepted, slow speed for {self.startup_delay}s"
             )
         self.last_cmd_time = now
 
+    def _prepare_filter(self, positions, *, reset=False):
+        buffers, sums, filtered = [], [], []
+        for i, position in enumerate(positions):
+            previous = self._filter_buffers[i]
+            total = self._filter_sums[i]
+            if (
+                reset
+                or not math.isfinite(total)
+                or not all(map(math.isfinite, previous))
+            ):
+                previous, total = [], 0.0
+            if len(previous) >= self.filter_window:
+                total -= previous[0]
+                previous = previous[1:]
+            candidate = previous + [position]
+            total += position
+            value = total / len(candidate)
+            if not math.isfinite(total) or not math.isfinite(value):
+                raise ValueError(f"Joint {i + 1} filtered target must be finite")
+            buffers.append(candidate)
+            sums.append(total)
+            filtered.append(value)
+        return filtered, buffers, sums
+
     def _apply_filter(self, positions: list[float]) -> list[float]:
-        filtered = [0.0] * NUM_JOINTS
-        for i in range(NUM_JOINTS):
-            buf = self._filter_buffers[i]
-            if len(buf) >= self.filter_window:
-                self._filter_sums[i] -= buf[0]
-                buf.pop(0)
-            buf.append(positions[i])
-            self._filter_sums[i] += positions[i]
-            filtered[i] = self._filter_sums[i] / len(buf)
-        return filtered
+        """Preview filtered positions without committing a rejected command."""
+        return self._prepare_filter(positions)[0]
 
     # ================================================================
     # Service 回调
@@ -311,6 +382,10 @@ class ArmNode(Node):
         self.normal_speed_active = False
         self.first_cmd_time = None
         self.last_cmd_time = None
+        self._speed_recovery_pending = False
+        self._filter_buffers = [[] for _ in range(NUM_JOINTS)]
+        self._filter_sums = [0.0] * NUM_JOINTS
+        self._slow_speed_ready = False
 
     def _home(self, cancel):
         self._task_call(

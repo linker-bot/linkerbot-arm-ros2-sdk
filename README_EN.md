@@ -16,6 +16,13 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 - **Joint names** match motor CAN IDs (left: 61-67, right: 51-57)
 - **Lifecycle services**: enable, disable, home, emergency stop, reset error, calibrate zero
 - **Speed management**: slow start → normal after delay → slow on command timeout
+- **Command rejection and recovery**: non-finite positions are rejected before
+  filtering. SDK-rejected targets do not enter filter history or refresh accepted
+  command timestamps. Initial/recovery commands configure slow speed before the
+  target. A failed speed write gates new targets until all-joint slow-speed setup
+  succeeds, then restarts the startup interval. Homing, stopping and command
+  timeout clear filter history; `filter_window` must be positive. Success means SDK
+  admission, not hardware execution. Rejected targets are logged and not replayed.
 - **Dual-arm support**: launch left and right arms with separate CAN interfaces
 - **Topic-compatible** with existing downstream nodes — no changes required
 - **System dependency support**: compatible with NumPy 1.x and ROS2 Pinocchio; see the environment guide

@@ -6,8 +6,11 @@ import sys
 from pathlib import Path
 from unittest.mock import create_autospec
 
-import linkerbot_arm
 import pytest
+from linker_arm_ros2.sdk_loader import ensure_sdk_importable
+
+ensure_sdk_importable()
+import linkerbot_arm  # noqa: E402 - production discovery must run first.
 
 ROOT = Path(__file__).resolve().parents[1]
 

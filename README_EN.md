@@ -11,7 +11,7 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 - **Unified driver** for both A7 and A7 Lite arm models via a single config file
 - **Centralized configuration** — all parameters in `config/arm_config.yaml`, no launch arguments needed
 - **Protocol-Adapter architecture** — ROS2 layer fully decoupled from SDK; SDK updates require no ROS2 node changes
-- **Streaming control** — uses `set_angles()` for high-frequency target updates (100Hz teleoperation), bypassing SDK's `move_j()` motion guard
+- **Streaming control** — uses `set_angles()` for high-frequency target updates (external control commands at 100 Hz), bypassing SDK's `move_j()` motion guard
 - **Joint state publishing** at configurable rate (default 100 Hz): position, velocity, effort (torque)
 - **Joint names** match motor CAN IDs (left: 61-67, right: 51-57)
 - **Lifecycle services**: enable, disable, home, emergency stop, reset error, calibrate zero
@@ -29,12 +29,13 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 
 ## Prerequisites
 
-- ROS2 Jazzy (or Humble)
-- Python 3.10+ (use the Python shipped with your ROS2 distribution)
+- ROS2 Jazzy with Python 3.12 for the validated deployment; Humble requires Python 3.10 and its full dependency combination has not been validated
 - CAN interface configured and active (e.g. `can0`, `can1`)
 - `linkerbot-arm` 0.6.x, imported as `linkerbot_arm`; see [environment setup](docs/environment_setup.md) for package and source installation
 - Pinocchio built for the selected NumPy version; see the environment guide
-- System packages: numpy, scipy, python-can, pydantic
+- numpy, scipy, python-can, pydantic and `linkerbot-transport[can]==1.0.0` in the same Python environment;
+  install the matching arm/transport commits from this repository's
+  [source manifest](requirements/source-versions.txt). See [environment setup](docs/environment_setup.md#ros2-系统依赖方案).
 
 ## Build
 
@@ -44,10 +45,16 @@ cd ~/linkerbot_data_collection/linkerhand_data_collection_ws
 # Install the independent arm SDK first and use colcon from the same Python environment.
 # Source deployments may place linkerbot-arm at src/linkerbot-arm.
 
-# Build
-colcon build --packages-select linker_arm_ros2 --symlink-install
+# Activate the venv from the environment guide, then run Ubuntu Jazzy's colcon with its Python
+python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
+head -n 1 install/linker_arm_ros2/lib/linker_arm_ros2/arm_node
+python -c "import sys; print(sys.executable)"
 source install/setup.bash
 ```
+
+The generated node's shebang should point to the active venv. Environments that already
+provide a venv colcon entry point can build directly; verify both its interpreter and the
+generated node's interpreter. See [environment setup](docs/environment_setup.md#ros2-系统依赖方案).
 
 > Code verification: ROS2 supports P7; standalone calibration and lifecycle scripts still support A7/A7lite only.
 
@@ -65,7 +72,7 @@ bash scripts/detect_can.sh
 
 The script will:
 1. Automatically activate all CAN interfaces (setting bitrate to 1 Mbps)
-2. Detect connected devices (hands, arms, TA teleop arm) on each CAN bus
+2. Detect connected devices (hands, arms, TA master arm) on each CAN bus
 3. Generate `scripts/can_config.yaml` with the detection results
 
 > If your sudo password differs from the default, edit the `PASSWORD` variable in `scripts/detect_can.sh`, or pass it via environment variable: `PASSWORD=yourpass bash scripts/detect_can.sh`
@@ -305,7 +312,7 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 
 | | `set_angles()` | `move_j()` |
 |---|---|---|
-| Purpose | Streaming teleoperation (100Hz) | Point-to-point motion |
+| Purpose | External control command streaming (100 Hz) | Point-to-point motion |
 | Motion guard | None | Yes (blocked while moving) |
 | Motion timer | Not started | Started (estimates completion) |
 | Underlying call | `_set_angles()` | `_set_angles()` + timer |
@@ -313,18 +320,22 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 
 This node uses `set_angles()` for streaming control; `move_j()` is only used internally by `home()`.
 
+An "external control command" is a `JointState` message published by an external program to
+`left_arm_joint_control` or `right_arm_joint_control`, with target angles for all seven joints.
+
 ## SDK Loading and Migration
 
 The adapter, calibration tool and lifecycle script share `sdk_loader.py`:
 
 1. `linkerbot_arm` importable in the current Python environment, including an installed package or an existing Python search path.
 2. `LINKERBOT_ARM_SRC=/path/to/linkerbot-arm/src`; repository roots are also accepted.
-3. Explicit `LINKERBOT_SDK_SRC`, retained for one transition cycle with a migration warning.
+3. When the new variable is unset, `LINKERBOT_SDK_SRC` remains a compatibility alias;
+   its path must also provide the new `linkerbot_arm` package, and using it prints a migration warning.
 4. A `linkerbot-arm` checkout beside the ROS2 repository or under an ancestor workspace's `src/`.
 
-The old full SDK checkout is no longer discovered automatically, and an installed legacy
-`linkerbot` package is not an automatic fallback. The old variable may temporarily point
-to legacy full SDK source; the new variable only accepts the `linkerbot_arm` namespace.
+The node and tools load only `linkerbot_arm`. Both source variables accept only this
+namespace; legacy `linkerbot` source and installed packages are not fallback sources.
+The node still checks the canonical SDK's cancellable-home capability before opening CAN.
 Invalid explicit paths and missing dependencies produce actionable errors. Source variables
 do not override an already importable canonical SDK; restart Python when changing SDK sources.
 
@@ -336,17 +347,26 @@ The independent `linkerbot_arm`, `linkerbot_hand` and `linkerbot_transport` name
 Use the Python version provided by your ROS2 distribution. Install the SDK, build with colcon
 and run the node in the same environment. Configure the ROS2 system Pinocchio/NumPy binaries
 separately from the PyPI `kinetix` extra.
+The validated Jazzy deployment uses Python 3.12 and a venv with system site packages.
+SDK `constraints/ros-jazzy.txt` pins NumPy and SciPy; APT provides Pinocchio and eigenpy.
 
 | Dependency | Version and source |
 |-----------|---------|
-| linkerbot-arm | 0.6.x; pin a verified release or source commit |
-| linkerbot-transport | 1.0.0; company package index or pinned source commit |
-| NumPy / SciPy | Meet SDK minimums and match the chosen Pinocchio binaries |
+| linkerbot-arm | 0.6.x; use the commit in `requirements/source-versions.txt` |
+| linkerbot-transport | 1.0.0; use the commit in the same source manifest |
+| NumPy | Jazzy deployment lock: 1.26.4 |
+| SciPy | Validated venv: 1.13.1; Ubuntu system package: 1.11.4 |
 | Pydantic | 2.x |
-| Pinocchio | Required when constructing all three arm models, including joint-only control |
+| Pinocchio / eigenpy | APT: 4.1.0 / 3.13.0; all three arm constructors require kinematics |
 
 See [environment setup](docs/environment_setup.md) for installation, the company transport
 package source and checks that do not open hardware.
+
+Install the base SDK for ROS2, without the `kinetix` extra. The extra only installs pip
+dependencies; the base SDK provides the same kinematics when compatible Pinocchio is present.
+The retained `constraints/ros2.txt` represents a tested NumPy 1.x / SciPy <1.14 range rather
+than a universal ROS2 requirement. The current legacy full SDK requires NumPy >=2.2.6 and
+cannot share this Jazzy deployment lock; keep it in its own environment.
 
 ## File Structure
 

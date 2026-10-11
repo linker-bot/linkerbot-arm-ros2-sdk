@@ -1,7 +1,7 @@
 """Load the canonical arm SDK without depending on ROS2 or the aggregate SDK.
 
 An importable linkerbot_arm takes priority over source discovery. The legacy
-source variable remains an explicit, deprecated migration path for one cycle.
+source variable remains a deprecated alias for canonical SDK paths.
 """
 
 import importlib
@@ -16,14 +16,10 @@ SDK_ENV_VAR = "LINKERBOT_ARM_SRC"
 LEGACY_SDK_ENV_VAR = "LINKERBOT_SDK_SRC"
 
 
-def _source_root(path: Path, *, allow_legacy: bool = False) -> str | None:
+def _source_root(path: Path) -> str | None:
     for candidate in (path, path / "src"):
         if (candidate / "linkerbot_arm" / "__init__.py").is_file():
             return str(candidate.resolve())
-    if allow_legacy:
-        for candidate in (path, path / "src"):
-            if (candidate / "linkerbot" / "arm" / "__init__.py").is_file():
-                return str(candidate.resolve())
     return None
 
 
@@ -44,10 +40,10 @@ def find_sdk_source() -> str | None:
                 LEGACY_SDK_ENV_VAR,
                 SDK_ENV_VAR,
             )
-        source = _source_root(Path(configured).expanduser(), allow_legacy=legacy)
+        source = _source_root(Path(configured).expanduser())
         if source is None:
             raise ImportError(
-                f"{variable}={configured!r} does not contain the arm SDK. "
+                f"{variable}={configured!r} does not contain the linkerbot_arm SDK. "
                 f"Set {SDK_ENV_VAR} to the linkerbot-arm repository or its src directory."
             )
         return source
@@ -79,33 +75,17 @@ def load_sdk() -> ModuleType:
             "workspace src directory is also supported."
         )
 
-    canonical = (Path(source) / "linkerbot_arm" / "__init__.py").is_file()
-    module_name = "linkerbot_arm" if canonical else "linkerbot.arm"
-    if not canonical:
-        loaded = sys.modules.get("linkerbot")
-        if loaded is not None and Path(source, "linkerbot").resolve() not in {
-            Path(path).resolve() for path in getattr(loaded, "__path__", ())
-        }:
-            raise ImportError(
-                "linkerbot is already loaded from another location; restart the "
-                "process with linkerbot-arm installed or the intended SDK source."
-            )
-        logger.warning(
-            "Loading legacy linkerbot.arm via %s; migrate to linkerbot-arm 0.6.x",
-            LEGACY_SDK_ENV_VAR,
-        )
-
     added = source not in sys.path
     if added:
         sys.path.insert(0, source)
     importlib.invalidate_caches()
     try:
-        sdk = importlib.import_module(module_name)
+        sdk = importlib.import_module("linkerbot_arm")
     except BaseException:
         if added:
             sys.path.remove(source)
         raise
-    logger.info("Loaded %s from SDK source: %s", module_name, source)
+    logger.info("Loaded linkerbot_arm from SDK source: %s", source)
     return sdk
 
 

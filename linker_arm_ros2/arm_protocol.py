@@ -49,7 +49,7 @@ class ArmProtocol(ABC):
     def set_angles(self, target_joints: list[float]) -> None:
         """直接下发目标角度到各电机（流式控制用）。
 
-        不触发 motion timer，可高频调用（100Hz 遥操作）。
+        不触发 motion timer，可高频调用（100 Hz 外部控制指令）。
         电机按已设定的 velocity/acceleration profile 趋近目标。
         """
 

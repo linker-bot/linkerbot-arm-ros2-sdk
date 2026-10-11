@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Adapt linkerbot-arm (or the legacy full SDK) to the ROS2 arm protocol.
+"""Adapt linkerbot_arm to the ROS2 arm protocol.
 
 SDK discovery is shared with standalone tools through sdk_loader.
 """
@@ -24,7 +24,7 @@ _ARM_CLASSES: dict[str, type] = {
 
 
 class LinkerBotSDKAdapter(ArmProtocol):
-    """将 linkerbot SDK (A7 / A7lite / P7) 适配为 ArmProtocol 统一接口。
+    """将 linkerbot_arm SDK (A7 / A7lite / P7) 适配为 ArmProtocol 统一接口。
 
     直接调用 SDK 创建实例，不做额外的 wake-up / verify / retry。
     SDK 创建失败则直接抛出异常，由 launch 的 respawn 机制处理重启。

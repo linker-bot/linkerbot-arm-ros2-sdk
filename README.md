@@ -11,7 +11,7 @@
 - **统一驱动**：通过统一配置文件切换 A7 / A7 Lite / P7，无需两个独立仓库
 - **集中配置**：launch 使用的参数集中在 `config/arm_config.yaml` 中管理，修改后重新 launch 即可生效
 - **协议-适配器架构**：ROS2 通信层与 SDK 实现完全解耦，SDK 更新时无需修改 ROS2 节点代码
-- **流式控制**：使用 `set_angles()` 高频下发目标角度（100Hz 遥操作），绕过 SDK 的 `move_j()` motion guard
+- **流式控制**：使用 `set_angles()` 高频下发目标角度（100 Hz 外部控制指令流），绕过 SDK 的 `move_j()` motion guard
 - **关节状态发布**：以可配置频率（默认 100Hz）发布关节角度、速度、力矩
 - **关节名称**：与电机 CAN ID 一致（左臂 61-67，右臂 51-57）
 - **生命周期服务**：使能、失能、回零、急停、错误重置、零位标定
@@ -27,12 +27,13 @@
 
 ## 前置条件
 
-- ROS2 Jazzy（或 Humble）
-- Python 3.10+（使用对应 ROS2 发行版的 Python）
+- ROS2 Jazzy，已验证的部署组合使用 Python 3.12；Humble 需 Python 3.10，完整依赖组合尚未验证
 - CAN 接口已配置并激活（如 `can0`、`can1`）
 - `linkerbot-arm` 0.6.x（导入 `linkerbot_arm`），安装或源码部署方式见 [环境配置](docs/environment_setup.md)
 - Pinocchio 与 NumPy 的二进制版本匹配，详见环境说明
-- 同一 Python 环境已安装 SDK 依赖：NumPy、SciPy、Pydantic 及 `linkerbot-transport[can]==1.0.0`
+- 同一 Python 环境已安装 SDK 依赖：NumPy、SciPy、Pydantic 及 `linkerbot-transport[can]==1.0.0`；
+  按本仓库的[固定源码清单](requirements/source-versions.txt)安装配套 arm/transport，
+  详见[环境配置](docs/environment_setup.md#ros2-系统依赖方案)
 
 ## 构建
 
@@ -42,10 +43,15 @@ cd ~/linkerbot_data_collection/linkerhand_data_collection_ws
 # 先按环境配置安装独立 arm SDK，使用同一 Python 环境中的 colcon。
 # 源码部署时，也可将 linkerbot-arm 放到 src/linkerbot-arm。
 
-# 构建
-colcon build --packages-select linker_arm_ros2 --symlink-install
+# 激活按环境配置创建的 venv，再用该 Python 执行 Ubuntu Jazzy 的 colcon 入口
+python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
+head -n 1 install/linker_arm_ros2/lib/linker_arm_ros2/arm_node
+python -c "import sys; print(sys.executable)"
 source install/setup.bash
 ```
+
+生成节点的 shebang 应指向当前 venv。其他环境已有 venv 的 colcon 入口时可直接构建，
+仍须核对入口和生成节点的解释器，详见[环境配置](docs/environment_setup.md#ros2-系统依赖方案)。
 
 > 代码核对：ROS2 节点支持 P7；独立标定和生命周期脚本目前仍只支持 A7/A7lite。
 
@@ -63,7 +69,7 @@ bash scripts/detect_can.sh
 
 脚本会自动完成以下步骤：
 1. 激活所有 CAN 接口（设置波特率 1 Mbps）
-2. 检测各 CAN 总线上连接的设备（灵巧手、机械臂、TA 遥操臂）
+2. 检测各 CAN 总线上连接的设备（灵巧手、机械臂、TA 主控臂）
 3. 将检测结果生成到 `scripts/can_config.yaml`
 
 > 如果 sudo 密码与默认值不同，可修改 `scripts/detect_can.sh` 中的 `PASSWORD` 变量，或通过环境变量传入：`PASSWORD=你的密码 bash scripts/detect_can.sh`
@@ -298,7 +304,7 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 
 | | `set_angles()` | `move_j()` |
 |---|---|---|
-| 用途 | 流式遥操作（100Hz） | 点到点运动 |
+| 用途 | 外部控制指令流（100 Hz） | 点到点运动 |
 | motion guard | 无 | 有（运动中禁止调用） |
 | motion timer | 不启动 | 启动（估计运动完成时间） |
 | 底层调用 | `_set_angles()` | `_set_angles()` + timer |
@@ -306,17 +312,21 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 
 本节点使用 `set_angles()` 进行流式控制，`move_j()` 仅在 `home()` 内部使用。
 
+本文中的“外部控制指令”指外部程序发布到 `left_arm_joint_control` 或
+`right_arm_joint_control` 的 `JointState` 消息，每条消息包含七个关节的目标角度。
+
 ## SDK 加载与过渡支持
 
 适配器、标定和生命周期脚本共用 `sdk_loader.py`，加载顺序为：
 
 1. 当前 Python 环境可导入的 `linkerbot_arm`（包括已安装包及已配置的 Python 搜索路径）。
 2. `LINKERBOT_ARM_SRC=/path/to/linkerbot-arm/src`，也接受仓库根目录。
-3. 旧变量 `LINKERBOT_SDK_SRC` 显式指定的源码，保留一个过渡周期；使用时输出迁移提示。
+3. 未设置新变量时，兼容 `LINKERBOT_SDK_SRC`；其路径也必须提供新 `linkerbot_arm`，使用时输出迁移提示。
 4. ROS2 仓库旁或祖先工作空间 `src/` 下的 `linkerbot-arm`。
 
-旧完整 SDK 目录不再自动查找，也不会自动改用环境中已安装的旧 `linkerbot`。
-旧变量仍可解析旧完整 SDK 的源码；当前节点另要求可取消回零能力，未同步该能力的旧 SDK 无法启动节点。新变量只接受 `linkerbot_arm` 命名空间。
+节点和工具只加载 `linkerbot_arm`。新旧两个源码变量都只接受该命名空间，
+不再解析旧完整 SDK 的 `linkerbot` 源码，也不将已安装的旧 `linkerbot` 作为回退来源。
+当前节点仍会在打开 CAN 前检查新 SDK 的可取消回零能力。
 显式路径无效或 SDK 缺少依赖时会报出对应错误，不会静默加载另一份源码。
 环境变量不会覆盖已可导入的独立 arm 包；切换来源后重启 Python 进程。
 
@@ -327,16 +337,24 @@ ROS2 直接依赖 `linkerbot-arm>=0.6.0,<0.7.0`，无需聚合包或 hand 包。
 
 使用与 ROS2 发行版匹配的 Python，SDK 安装、colcon 构建和节点运行使用同一个环境。
 ROS2 系统 Pinocchio/NumPy 组合与 PyPI `kinetix` extra 的二进制依赖应分别配置。
+已验证的 Jazzy 部署使用 Python 3.12 和读取系统包的 venv；SDK 的
+`constraints/ros-jazzy.txt` 固定 NumPy、SciPy，Pinocchio 和 eigenpy 由 APT 提供。
 
 | 依赖 | 版本与来源 |
 |------|------|
-| linkerbot-arm | 0.6.x，固定已验证的发行版本或源码提交 |
-| linkerbot-transport | 1.0.0，公司包源或固定源码提交 |
-| NumPy / SciPy | 满足 SDK 最低版本，并匹配所选 Pinocchio 二进制依赖 |
+| linkerbot-arm | 0.6.x，使用 `requirements/source-versions.txt` 指定的源码提交 |
+| linkerbot-transport | 1.0.0，使用同一源码清单指定的提交 |
+| NumPy | Jazzy 部署锁：1.26.4 |
+| SciPy | 已验证 venv：1.13.1；Ubuntu 系统包为 1.11.4 |
 | Pydantic | 2.x |
-| Pinocchio | 三型号构造均需要，即使只使用关节控制 |
+| Pinocchio / eigenpy | APT：4.1.0 / 3.13.0；三型号构造均需要运动学 |
 
 安装命令、公司 transport 包源与无硬件检查见 [环境配置](docs/environment_setup.md)。
+
+ROS2 安装基础 SDK，不带 `kinetix` extra；该 extra 只负责 pip 安装依赖，已有兼容
+Pinocchio 的基础包同样提供运动学。保留的 `constraints/ros2.txt` 表示已测 NumPy 1.x /
+SciPy <1.14 范围，并非所有 ROS2 版本的硬性要求。当前旧完整 SDK 要求 NumPy >=2.2.6，
+与 Jazzy 部署锁不兼容；继续使用旧 SDK 时保留其独立环境。
 
 ## 文件结构
 

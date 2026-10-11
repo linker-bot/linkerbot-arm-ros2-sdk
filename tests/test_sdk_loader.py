@@ -60,6 +60,9 @@ def test_environment_accepts_repo_or_source_root(
 ):
     source = make_sdk(tmp_path / "custom/src")
     monkeypatch.setenv(variable, str(source.parent if repo_root else source))
+    # Real ROS node tests can reconfigure logging before this file runs.
+    monkeypatch.setattr(sdk_loader.logger, "handlers", [caplog.handler])
+    monkeypatch.setattr(sdk_loader.logger, "propagate", False)
     with caplog.at_level(logging.WARNING):
         assert sdk_loader.find_sdk_source() == str(source)
     assert ("deprecated" in caplog.text) == (variable == "LINKERBOT_SDK_SRC")
@@ -80,9 +83,10 @@ def test_invalid_explicit_path_does_not_fall_through(monkeypatch, tmp_path):
         sdk_loader.find_sdk_source()
 
 
-def test_new_variable_rejects_old_namespace(monkeypatch, tmp_path):
+@pytest.mark.parametrize("variable", ["LINKERBOT_ARM_SRC", "LINKERBOT_SDK_SRC"])
+def test_explicit_variables_reject_old_namespace(monkeypatch, tmp_path, variable):
     source = make_sdk(tmp_path / "old/src", legacy=True)
-    monkeypatch.setenv("LINKERBOT_ARM_SRC", str(source))
+    monkeypatch.setenv(variable, str(source))
     with pytest.raises(ImportError, match="does not contain"):
         sdk_loader.find_sdk_source()
 
@@ -98,7 +102,8 @@ def test_installed_canonical_sdk_retains_priority(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "dependency", ["can", "numpy", "scipy", "pydantic", "linkerbot_arm.arm"]
+    "dependency",
+    ["can", "numpy", "scipy", "pydantic", "linkerbot_transport", "linkerbot_arm.arm"],
 )
 def test_dependency_errors_are_not_hidden(monkeypatch, dependency):
     error = ModuleNotFoundError(f"No module named {dependency!r}", name=dependency)
@@ -132,6 +137,7 @@ loader.__file__ = sys.argv[2] + '/isolated/sdk_loader.py'
             sys.executable,
             "-I",
             "-S",
+            "-B",
             "-c",
             bootstrap + code,
             LOADER_PATH,
@@ -144,25 +150,26 @@ loader.__file__ = sys.argv[2] + '/isolated/sdk_loader.py'
     )
 
 
-@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("deprecated_variable", [False, True])
 @pytest.mark.parametrize("repo_root", [False, True])
-def test_explicit_source_imports_in_clean_interpreter(tmp_path, legacy, repo_root):
-    source = make_sdk(tmp_path / "custom/src", legacy=legacy)
-    variable = "LINKERBOT_SDK_SRC" if legacy else "LINKERBOT_ARM_SRC"
+def test_explicit_source_imports_in_clean_interpreter(
+    tmp_path, deprecated_variable, repo_root
+):
+    source = make_sdk(tmp_path / "custom/src")
+    variable = "LINKERBOT_SDK_SRC" if deprecated_variable else "LINKERBOT_ARM_SRC"
     env = dict(os.environ, **{variable: str(source.parent if repo_root else source)})
     result = run_isolated(
         """
 sdk = loader.load_sdk()
 assert pathlib.Path(sdk.__file__).is_relative_to(pathlib.Path(sys.argv[2]))
-assert sdk.__name__ == sys.argv[3]
-if sdk.__name__ == 'linkerbot_arm':
-    assert 'linkerbot' not in sys.modules
+assert sdk.__name__ == 'linkerbot_arm'
+assert 'linkerbot' not in sys.modules
 assert loader.ensure_sdk_importable() is None
 """,
         env=env,
-        args=(source, "linkerbot.arm" if legacy else "linkerbot_arm"),
+        args=(source,),
     )
-    assert ("deprecated" in result.stderr) == legacy
+    assert ("deprecated" in result.stderr) == deprecated_variable
 
 
 def test_failed_source_import_restores_path_and_preserves_error(tmp_path):
@@ -186,7 +193,7 @@ assert sys.path == before
     )
 
 
-def test_legacy_source_does_not_mix_with_loaded_package(tmp_path):
+def test_legacy_source_is_rejected_without_changing_loaded_package(tmp_path):
     source = make_sdk(tmp_path / "legacy/src", legacy=True)
     run_isolated(
         """
@@ -194,12 +201,17 @@ from types import ModuleType
 other = ModuleType('linkerbot')
 other.__path__ = ['/another-sdk/linkerbot']
 sys.modules['linkerbot'] = other
+before = list(sys.path)
 try:
     loader.load_sdk()
 except ImportError as error:
-    assert 'already loaded' in str(error)
+    assert 'does not contain' in str(error)
+    assert 'LINKERBOT_ARM_SRC' in str(error)
 else:
-    raise AssertionError('mixed two legacy packages')
+    raise AssertionError('accepted an explicit legacy SDK')
+assert sys.modules['linkerbot'] is other
+assert sys.path == before
+assert 'linkerbot_arm' not in sys.modules
 """,
         env=dict(os.environ, LINKERBOT_SDK_SRC=str(source)),
         args=(source,),

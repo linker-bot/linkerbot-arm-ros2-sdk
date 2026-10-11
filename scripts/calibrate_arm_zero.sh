@@ -2,7 +2,8 @@
 # ===================================================================
 # A7 / A7 Lite 独立零位标定入口
 # 从 ../config/arm_config.yaml 读取 arm_type / left_arm / right_arm
-# 直接调用 linkerbot-arm，不走 ROS2 节点。
+# 直接调用 linkerbot-arm（导入 linkerbot_arm），不走 ROS2 节点。
+# 环境需提供配套 SDK/transport，安装来源见 requirements/source-versions.txt。
 # ===================================================================
 
 set -e

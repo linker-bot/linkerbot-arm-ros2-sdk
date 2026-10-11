@@ -2,12 +2,12 @@
 
 from unittest.mock import create_autospec
 
-import linkerbot_arm
 import pytest
 
 from linker_arm_ros2 import sdk_adapter
 from linker_arm_ros2.arm_factory import create_arm
 from linker_arm_ros2.arm_protocol import ArmProtocol
+import linkerbot_arm
 
 OPERATIONS = [
     ("enable", "enable", (), {}),

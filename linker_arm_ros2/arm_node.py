@@ -15,6 +15,7 @@ not hardware acknowledgements. Physical stop timing remains SDK/backend-specific
 from __future__ import annotations
 
 import math
+import struct
 import threading
 import time
 
@@ -86,14 +87,14 @@ class ArmNode(Node):
             "calibrate_zero_on_startup"
         ).value
         self.world_frame = self.get_parameter("world_frame").value
-        self.tcp_offset = list(self.get_parameter("tcp_offset").value)
+        self.tcp_offset = self.get_parameter("tcp_offset").value
         self.slow_max_velocity = self.get_parameter("slow_max_velocity").value
         self.normal_max_velocity = self.get_parameter("normal_max_velocity").value
         self.startup_delay = self.get_parameter("startup_delay").value
         self.filter_window = self.get_parameter("filter_window").value
-        self.position_kp = float(self.get_parameter("position_kp").value)
-        if not isinstance(self.filter_window, int) or self.filter_window < 1:
-            raise ValueError("filter_window must be a positive integer")
+        self.position_kp = self.get_parameter("position_kp").value
+        self._validate_parameters()
+        self.tcp_offset = list(self.tcp_offset)
 
         # ── 关节名称（与电机 CAN ID 一致）──────────────────────────
         self.joint_names = [str(mid) for mid in _MOTOR_IDS[self.side]]
@@ -168,6 +169,69 @@ class ArmNode(Node):
         # Services and state publishing exist before any enable/home task starts.
         if self.auto_enable or self.calibrate_zero_on_startup:
             self._tasks.submit(self._startup)
+
+    def _validate_parameters(self):
+        """Reject unusable configuration before constructing the hardware SDK."""
+        if not isinstance(self.side, str) or self.side not in _MOTOR_IDS:
+            raise ValueError("side must be 'left' or 'right'")
+        if not isinstance(self.arm_type, str) or self.arm_type.lower() not in (
+            "a7", "a7lite", "p7"
+        ):
+            raise ValueError("arm_type must be a7, a7lite or p7")
+        if self.world_frame not in ("urdf", "maestro"):
+            raise ValueError("world_frame must be 'urdf' or 'maestro'")
+        if not isinstance(self.can_interface, str) or not self.can_interface.strip():
+            raise ValueError("can_interface must be a non-empty interface name")
+        if not isinstance(self.auto_enable, bool) or not isinstance(
+            self.calibrate_zero_on_startup, bool
+        ):
+            raise ValueError("auto_enable and calibrate_zero_on_startup must be booleans")
+        if isinstance(self.filter_window, bool) or not isinstance(
+            self.filter_window, int
+        ) or self.filter_window < 1:
+            raise ValueError("filter_window must be a positive integer")
+
+        def finite(name, value):
+            try:
+                valid = (
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and math.isfinite(value)
+                )
+            except (TypeError, OverflowError):
+                valid = False
+            if not valid:
+                raise ValueError(f"{name} must be a finite number")
+            return value
+
+        rate = finite("publish_rate", self.publish_rate)
+        if rate <= 0 or not 1 <= 1e9 / rate <= 2**63 - 1:
+            raise ValueError("publish_rate must produce a positive representable ROS timer period")
+        if finite("cmd_timeout", self.cmd_timeout) <= 0:
+            raise ValueError("cmd_timeout must be positive")
+        if finite("startup_delay", self.startup_delay) < 0:
+            raise ValueError("startup_delay must be non-negative")
+        # Every enable/home needs positive speed for a nonzero return distance.
+        if not 0 < finite("slow_max_velocity", self.slow_max_velocity) <= 50:
+            raise ValueError("slow_max_velocity must be in (0, 50] rad/s")
+        if not 0 <= finite("normal_max_velocity", self.normal_max_velocity) <= 50:
+            raise ValueError("normal_max_velocity must be in [0, 50] rad/s")
+        kp = finite("position_kp", self.position_kp)
+        if kp < 0:
+            raise ValueError("position_kp must be non-negative")
+        try:
+            struct.pack("<f", kp)
+        except (OverflowError, struct.error) as error:
+            raise ValueError("position_kp must be representable as float32") from error
+        if isinstance(self.tcp_offset, (str, bytes)):
+            raise ValueError("tcp_offset must contain three finite numbers")
+        try:
+            if len(self.tcp_offset) != 3:
+                raise ValueError("tcp_offset must contain three finite numbers")
+            for value in self.tcp_offset:
+                finite("tcp_offset", value)
+        except TypeError as error:
+            raise ValueError("tcp_offset must contain three finite numbers") from error
 
     # ================================================================
     # 控制循环
@@ -274,6 +338,21 @@ class ArmNode(Node):
                 f"Expected {NUM_JOINTS} joint positions, got {len(positions)}"
             )
             return
+
+        names = list(msg.name)
+        if names:
+            if (
+                len(names) != NUM_JOINTS
+                or len(set(names)) != NUM_JOINTS
+                or set(names) != set(self.joint_names)
+            ):
+                self.get_logger().error(
+                    f"Joint names must contain each configured CAN ID exactly once: {self.joint_names}",
+                    throttle_duration_sec=1.0,
+                )
+                return
+            by_name = dict(zip(names, positions))
+            positions = [by_name[name] for name in self.joint_names]
 
         for index, position in enumerate(positions, 1):
             if not math.isfinite(position):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -27,7 +28,7 @@ PACKAGE_ROOT = SCRIPT_PATH.parent.parent           # src/linker_arm_ros2
 WORKSPACE_ROOT = PACKAGE_ROOT.parent.parent        # workspace root
 DEFAULT_CONFIG_PATH = PACKAGE_ROOT / "config" / "arm_config.yaml"
 TASK_CONFIG_PATH = WORKSPACE_ROOT / "task_config.json"
-ARM_NODE_NAMES = ("/left_arm_node", "/right_arm_node")
+ARM_NODE_NAMES = ("arm_node", "left_arm_node", "right_arm_node")
 SIDES = ("left", "right")
 SUPPORTED_ARM_TYPES = ("a7", "a7lite")
 
@@ -105,13 +106,18 @@ def ensure_config_consistency(config: ArmConfig, *, ignore_mismatch: bool) -> No
 
 
 def find_running_arm_nodes(node_list_output: str) -> list[str]:
+    """Recognize the default and launch controller names in any namespace.
+
+    This graph snapshot cannot exclude renamed nodes, other ROS domains or
+    standalone SDK processes; it is not an exclusive lock on a CAN device.
+    """
     nodes = {line.strip() for line in node_list_output.splitlines() if line.strip()}
-    return [name for name in ARM_NODE_NAMES if name in nodes]
+    return sorted(name for name in nodes if name.rsplit("/", 1)[-1] in ARM_NODE_NAMES)
 
 
 def read_ros_node_list() -> str:
     if shutil.which("ros2") is None:
-        return ""
+        raise RuntimeError("无法查询 ROS2 节点：找不到 ros2 命令，已拒绝标定")
 
     try:
         result = subprocess.run(
@@ -121,8 +127,12 @@ def read_ros_node_list() -> str:
             text=True,
             timeout=3,
         )
-    except (subprocess.SubprocessError, OSError):
-        return ""
+    except (subprocess.SubprocessError, OSError) as error:
+        raise RuntimeError("无法查询 ROS2 节点，已拒绝标定") from error
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ROS2 节点查询失败（exit={result.returncode}），已拒绝标定: {result.stderr.strip()}"
+        )
     return result.stdout
 
 
@@ -170,8 +180,23 @@ def confirm_zero_pose(side: str, arm_type: str) -> None:
 
 
 def verify_zero_angles(side: str, angles: list[float], tolerance: float, label: str) -> None:
+    if (
+        isinstance(tolerance, bool)
+        or not isinstance(tolerance, (int, float))
+        or not math.isfinite(tolerance)
+        or tolerance <= 0
+    ):
+        raise ValueError("tolerance must be finite and positive")
     if len(angles) != 7:
         raise RuntimeError(f"[{side}] expected 7 joint angles, got {len(angles)}")
+    try:
+        finite = all(
+            not isinstance(value, bool) and math.isfinite(value) for value in angles
+        )
+    except (TypeError, OverflowError):
+        finite = False
+    if not finite:
+        raise RuntimeError(f"[{side}] {label}关节角必须全部为有限数值")
 
     max_abs = max(abs(v) for v in angles)
     formatted = ", ".join(f"{v:.4f}" for v in angles)
@@ -367,7 +392,18 @@ def parse_args(argv: list[str] | None = None):
         action="store_true",
         help="只连接指定机械臂并强制失能，不执行标定/回零",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not math.isfinite(args.tolerance) or args.tolerance <= 0:
+        parser.error("--tolerance must be finite and positive")
+    if not math.isfinite(args.home_velocity) or not 0 < args.home_velocity <= 50:
+        parser.error("--home-velocity must be finite and in (0, 50] rad/s")
+    for name in ("flash_wait", "calibrate_joint_wait", "reconnect_wait", "disable_wait"):
+        value = getattr(args, name)
+        if not math.isfinite(value) or value < 0:
+            parser.error(f"--{name.replace('_', '-')} must be finite and non-negative")
+    if args.disable_attempts < 1:
+        parser.error("--disable-attempts must be positive")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

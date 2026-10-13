@@ -11,7 +11,7 @@
 - **统一驱动**：通过统一配置文件切换 A7 / A7 Lite / P7，无需两个独立仓库
 - **集中配置**：launch 使用的参数集中在 `config/arm_config.yaml` 中管理，修改后重新 launch 即可生效
 - **协议-适配器架构**：ROS2 通信层与 SDK 实现完全解耦，SDK 更新时无需修改 ROS2 节点代码
-- **流式控制**：使用 `set_angles()` 高频下发目标角度（100 Hz 外部控制指令流），绕过 SDK 的 `move_j()` motion guard
+- **流式控制**：使用 `set_angles()` 高频下发目标角度（100 Hz 外部控制指令流），保留节点及 SDK 的停止、任务准入检查
 - **关节状态发布**：以可配置频率（默认 100Hz）发布关节角度、速度、力矩
 - **关节名称**：与电机 CAN ID 一致（左臂 61-67，右臂 51-57）
 - **生命周期服务**：使能、失能、回零、急停、错误重置、零位标定
@@ -22,7 +22,7 @@
   回零、停止及命令超时后清空滤波窗口；`filter_window` 必须为正整数。
   以上成功表示 SDK 接受提交，不代表硬件已执行。被拒绝目标记录日志，不自动重放。
 - **双臂支持**：同时启动左右臂，各自使用独立 CAN 接口
-- **Topic 兼容**：与现有下游节点完全兼容，无需修改
+- **Topic 兼容**：保留话题和消息类型，无名指令保持原有位置顺序；具名指令按 CAN ID 验证和重排
 - **系统依赖兼容**：支持 NumPy 1.x 与 ROS2 Pinocchio，安装方案见环境说明
 
 ## 前置条件
@@ -160,9 +160,9 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 ```
 1. 创建 SDK 实例 → 自动检查 7 个电机通信
 2. disable() → 清除旧状态
-3. 等待 0.1s → 确保电机处理完 disable 指令
+3. 等待 0.1s → 保留 disable 指令发送余量
 4. enable() → 使能电机（内部自动 reset_error + set_control_mode(PP) + enable）
-5. 等待 0.2s → 确保所有电机完成使能
+5. 等待 0.2s → 保留使能指令发送余量
 6. set_velocities(slow) → 设置慢速
 7. 后台执行可取消回零 → 任务完成后开放流式控制
 8. 状态发布和服务在启动任务前就已建立，回零期间继续运行
@@ -198,6 +198,11 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 - 左臂：`["61", "62", "63", "64", "65", "66", "67"]`
 - 右臂：`["51", "52", "53", "54", "55", "56", "57"]`
 
+控制消息的 `position` 必须有七个有限角度。`name` 非空时必须恰好包含当前臂的七个
+CAN ID 名称，每个出现一次；允许任意顺序，节点按名称将角度重排到关节顺序。
+未知、重复、缺失名称或长度不一致会拒绝整条指令，不更新滤波历史和有效命令计时。
+`name` 为空时保持上述固定位置顺序兼容。
+
 ## Service
 
 所有服务使用 `std_srvs/srv/Trigger`，位于节点命名空间下。
@@ -215,6 +220,8 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 `disable` / `emergency_stop` 可以取消当前任务，被取消的原请求返回 `success=false`。
 服务仍使用原来的 `Trigger` 类型，成功响应表示操作已返回，不是仅进入后台队列。
 停止后，显式使能或回零成功才恢复流式控制。软件停止仍受 SDK、CAN 排队和驱动耗时影响。
+固定源码清单中的 A7lite SDK 停止也持续锁存，不再等待两秒自动恢复；必须显式 `enable()` 或
+成功完成 `home()` / `home_cancellable()` 才重新接收目标。
 
 启动或使能失败会尝试失能并关闭 SDK，记录具体错误；关闭连接后需重启节点。
 可取消回零依赖本仓库 `requirements/source-versions.txt` 指定的 arm/transport 源码，
@@ -226,7 +233,7 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `arm_type` | string | `"a7"` | 机型：`"a7"` 或 `"a7lite"` |
+| `arm_type` | string | `"a7"` | 机型：`"a7"`、`"a7lite"` 或 `"p7"` |
 | `auto_enable` | bool | `true` | 启动时自动 disable → enable → 慢速回零 |
 | `calibrate_zero` | bool | `false` | 启动时标定零位（使能前执行） |
 | `left_arm` | string | `"can1"` | 左臂 CAN 接口 |
@@ -237,6 +244,15 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 | `normal_max_velocity` | double | `3.0` | 正常速度上限 (rad/s) |
 | `startup_delay` | double | `2.0` | 首次指令后多久切换到正常速度 (秒) |
 | `filter_window` | int | `1` | 滑动平均滤波器窗口大小 |
+
+节点在创建 SDK 实例、打开 CAN 前统一校验参数。`side` 只接受 `left` / `right`，
+`arm_type` 只接受已注册的三款型号，`world_frame` 为 `urdf` / `maestro`，CAN 接口名须非空。
+`auto_enable` 和启动标定开关须为布尔值，`filter_window` 须为正整数；
+`publish_rate` 须为有限正值且周期可表示为 ROS 纳秒定时器，`cmd_timeout` 须为有限正值，
+`startup_delay` 须为有限非负值。
+`slow_max_velocity` 范围为 `(0, 50]` rad/s，用于使能后的回零；
+`normal_max_velocity` 范围为 `[0, 50]` rad/s。`position_kp` 须有限、非负且可编码为 float32；
+`tcp_offset` 必须是三个有限数值。零速配置不代替 SDK 对非零运动所需正速度的检查。
 
 ## 关节限位
 
@@ -305,12 +321,20 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 | | `set_angles()` | `move_j()` |
 |---|---|---|
 | 用途 | 外部控制指令流（100 Hz） | 点到点运动 |
-| motion guard | 无 | 有（运动中禁止调用） |
-| motion timer | 不启动 | 启动（估计运动完成时间） |
-| 底层调用 | `_set_angles()` | `_set_angles()` + timer |
-| 控制模式 | PP | PP |
+| 任务准入 | 节点门禁及 SDK 型号对应的检查 | SDK 点到点任务检查 |
+| 运动任务 | 不启动点到点任务 | 按型号使用计时或轨迹任务 |
+| 底层调用 | `_set_angles()`，P7 自动限幅 | SDK 规划/计时后的目标提交 |
+| 控制模式 | SDK PP 接口；P7 J6/J7 为 PTM | SDK PP 接口；P7 J6/J7 为 PTM |
 
 本节点使用 `set_angles()` 进行流式控制，`move_j()` 仅在 `home()` 内部使用。
+
+固定源码清单中的 SDK 将 P7 外部流式目标按当前逐关节速度、加速度配置限幅，覆盖 J6/J7；
+每次开始或恢复流式控制的首帧从测量位置建立状态并保持当前位置。
+之后需要周期性发送外部控制指令，才能逐步趋近目标；单次消息不会完成点到点运动。
+SDK 使用单调时钟，按相邻受理目标之间的实际时间间隔计算速度和加速度限制。
+限幅约束的是提交的目标轨迹，不能代替实测速度或到位确认。
+
+独立标定及生命周期脚本的检查边界和退出清理见[环境说明](docs/environment_setup.md#独立工具与检查边界)。
 
 本文中的“外部控制指令”指外部程序发布到 `left_arm_joint_control` 或
 `right_arm_joint_control` 的 `JointState` 消息，每条消息包含七个关节的目标角度。

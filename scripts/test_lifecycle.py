@@ -6,7 +6,7 @@
 模拟 arm_node.py 的完整生命周期，用于隔离定位 SDK 问题和 ROS2 集成问题：
   1. 创建双臂 SDK 实例
   2. disable → 0.1s → enable → 0.2s（与 arm_node.py 时序一致）
-  3. set_velocities(slow) → home(blocking=True)
+  3. set_velocities(slow) → home_cancellable(shutdown_event)
   4. 状态读取（get_angles / get_velocities / get_torques）
   5. set_angles 流式控制模拟
   6. disable → 0.5s → close
@@ -19,6 +19,7 @@ import argparse
 import os
 import signal
 import sys
+import threading
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,11 +38,13 @@ SLOW_VEL = 0.5
 NORMAL_VEL = 3.0
 
 shutdown_requested = False
+_shutdown_event = threading.Event()
 
 
 def on_signal(sig, frame):
     global shutdown_requested
     shutdown_requested = True
+    _shutdown_event.set()
     print(f"\n[SIGNAL] 收到 {signal.Signals(sig).name}，准备关闭...")
 
 
@@ -62,6 +65,8 @@ def create_arm(arm_type, side, can_interface):
     cls = ARM_CLASSES.get(arm_type.lower())
     if cls is None:
         raise ValueError(f"不支持的 arm_type: {arm_type}")
+    if not callable(getattr(cls, "home_cancellable", None)):
+        raise RuntimeError("SDK must provide home_cancellable; update the paired arm source")
     print(f"  [{side}] 创建 {arm_type} 实例, CAN={can_interface} ...")
     t0 = time.perf_counter()
     arm = cls(side=side, interface_name=can_interface)
@@ -71,9 +76,13 @@ def create_arm(arm_type, side, can_interface):
 
 
 def test_enable(arm, side):
+    if shutdown_requested:
+        return
     print(f"  [{side}] disable (清除旧状态) ...")
     arm.disable()
     time.sleep(0.1)
+    if shutdown_requested:
+        return
 
     print(f"  [{side}] enable ...")
     t0 = time.perf_counter()
@@ -90,14 +99,19 @@ def test_enable(arm, side):
 
 
 def test_home(arm, side):
+    if shutdown_requested:
+        return
     print(f"  [{side}] set_velocities({SLOW_VEL}) ...")
     arm.set_velocities([SLOW_VEL] * NUM_JOINTS)
 
-    print(f"  [{side}] home(blocking=True) ...")
+    if shutdown_requested:
+        return
+    print(f"  [{side}] home_cancellable ...")
     t0 = time.perf_counter()
-    arm.home(blocking=True)
+    arm.home_cancellable(_shutdown_event)
     dt = time.perf_counter() - t0
-    print(f"  [{side}] home 完成 ({dt:.3f}s)")
+    result = "取消" if shutdown_requested else "完成"
+    print(f"  [{side}] home {result} ({dt:.3f}s)")
 
 
 def test_state_read(arm, side, count=5):
@@ -116,6 +130,8 @@ def test_state_read(arm, side, count=5):
 
 
 def test_streaming(arm, side, duration=3.0, hz=100):
+    if shutdown_requested:
+        return
     print(f"  [{side}] 流式控制测试: set_angles 到当前位置, {hz}Hz, {duration}s ...")
     try:
         target = arm.get_angles()
@@ -164,6 +180,30 @@ def test_close(arm, side):
     print(f"  [{side}] close 完成 ({dt:.3f}s)")
 
 
+def _cleanup_arms(arms):
+    """Attempt every disable and close, even if a previous arm fails cleanup."""
+    errors = []
+    for side, arm in arms.items():
+        try:
+            test_disable(arm, side)
+        except BaseException as error:
+            errors.append(error)
+            print(f"  [{side}] 退出失能失败: {error}", file=sys.stderr)
+    # Cancellation ends SDK waiting; disable still has to reach the hardware.
+    try:
+        time.sleep(0.5)
+    except BaseException as error:
+        errors.append(error)
+        print(f"  退出发送等待异常: {error}", file=sys.stderr)
+    for side, arm in arms.items():
+        try:
+            test_close(arm, side)
+        except BaseException as error:
+            errors.append(error)
+            print(f"  [{side}] 关闭连接失败: {error}", file=sys.stderr)
+    return errors
+
+
 def run_single_arm(arm_type, side, can_interface):
     arm = None
     try:
@@ -182,16 +222,19 @@ def run_single_arm(arm_type, side, can_interface):
     except Exception as e:
         print(f"  [{side}] 异常: {e}")
         return arm
+    finally:
+        if arm is not None:
+            _cleanup_arms({side: arm})
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="SDK 生命周期测试")
     parser.add_argument("--arm-type", type=str, default=None)
     parser.add_argument("--left-can", type=str, default=None)
     parser.add_argument("--right-can", type=str, default=None)
     parser.add_argument("--single", choices=["left", "right"], default=None,
                         help="只测试单臂")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cfg = load_config()
     arm_type = args.arm_type or (cfg["arm_type"] if cfg else "a7lite")
@@ -208,60 +251,56 @@ def main():
 
     arms = {}
 
-    # ── Step 1: 创建实例 ──────────────────────────────────────
-    print("\n[Step 1] 创建 SDK 实例")
-    if args.single != "right":
-        arms["left"] = create_arm(arm_type, "left", left_can)
-    if args.single != "left" and not shutdown_requested:
-        arms["right"] = create_arm(arm_type, "right", right_can)
+    try:
+        # ── Step 1: 创建实例 ──────────────────────────────────────
+        print("\n[Step 1] 创建 SDK 实例")
+        if args.single != "right" and not shutdown_requested:
+            arms["left"] = create_arm(arm_type, "left", left_can)
+        if args.single != "left" and not shutdown_requested:
+            arms["right"] = create_arm(arm_type, "right", right_can)
 
-    if shutdown_requested:
-        print("\n[中断] 跳到关闭流程")
-    else:
-        # ── Step 2: enable ────────────────────────────────────
-        print("\n[Step 2] disable → enable")
-        for side, arm in arms.items():
-            if shutdown_requested:
-                break
-            test_enable(arm, side)
+        if shutdown_requested:
+            print("\n[中断] 跳到关闭流程")
+        else:
+            # ── Step 2: enable ────────────────────────────────────
+            print("\n[Step 2] disable → enable")
+            for side, arm in arms.items():
+                if shutdown_requested:
+                    break
+                test_enable(arm, side)
 
-    if not shutdown_requested:
-        # ── Step 3: home ──────────────────────────────────────
-        print("\n[Step 3] 慢速回零")
-        for side, arm in arms.items():
-            if shutdown_requested:
-                break
-            test_home(arm, side)
+        if not shutdown_requested:
+            # ── Step 3: home ──────────────────────────────────────
+            print("\n[Step 3] 慢速回零")
+            for side, arm in arms.items():
+                if shutdown_requested:
+                    break
+                test_home(arm, side)
 
-    if not shutdown_requested:
-        # ── Step 4: 状态读取 ──────────────────────────────────
-        print("\n[Step 4] 状态读取")
-        for side, arm in arms.items():
-            if shutdown_requested:
-                break
-            test_state_read(arm, side)
+        if not shutdown_requested:
+            # ── Step 4: 状态读取 ──────────────────────────────────
+            print("\n[Step 4] 状态读取")
+            for side, arm in arms.items():
+                if shutdown_requested:
+                    break
+                test_state_read(arm, side)
 
-    if not shutdown_requested:
-        # ── Step 5: 流式控制 ──────────────────────────────────
-        print("\n[Step 5] 流式控制 (set_angles)")
-        for side, arm in arms.items():
-            if shutdown_requested:
-                break
-            test_streaming(arm, side)
+        if not shutdown_requested:
+            # ── Step 5: 流式控制 ──────────────────────────────────
+            print("\n[Step 5] 流式控制 (set_angles)")
+            for side, arm in arms.items():
+                if shutdown_requested:
+                    break
+                test_streaming(arm, side)
 
-    # ── Step 6: 关闭 ──────────────────────────────────────────
-    print("\n[Step 6] disable → close")
-    for side, arm in arms.items():
-        if arm is not None:
-            test_disable(arm, side)
-    print("  等待 0.5s 确保所有 disable 帧发送完毕 ...")
-    time.sleep(0.5)
-    for side, arm in arms.items():
-        if arm is not None:
-            test_close(arm, side)
+    finally:
+        print("\n[Cleanup] disable → close")
+        cleanup_errors = _cleanup_arms(arms)
+    if cleanup_errors:
+        raise RuntimeError("Lifecycle cleanup failed; see per-arm errors")
 
     print("\n" + "=" * 60)
-    print("测试完成")
+    print("测试已中断并完成清理" if shutdown_requested else "测试完成")
     print("=" * 60)
 
 

@@ -11,7 +11,7 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 - **Unified driver** for both A7 and A7 Lite arm models via a single config file
 - **Centralized configuration** — all parameters in `config/arm_config.yaml`, no launch arguments needed
 - **Protocol-Adapter architecture** — ROS2 layer fully decoupled from SDK; SDK updates require no ROS2 node changes
-- **Streaming control** — uses `set_angles()` for high-frequency target updates (external control commands at 100 Hz), bypassing SDK's `move_j()` motion guard
+- **Streaming control** — uses `set_angles()` for high-frequency target updates (external control commands at 100 Hz), retaining node and SDK stop/task admission checks
 - **Joint state publishing** at configurable rate (default 100 Hz): position, velocity, effort (torque)
 - **Joint names** match motor CAN IDs (left: 61-67, right: 51-57)
 - **Lifecycle services**: enable, disable, home, emergency stop, reset error, calibrate zero
@@ -24,7 +24,7 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
   timeout clear filter history; `filter_window` must be positive. Success means SDK
   admission, not hardware execution. Rejected targets are logged and not replayed.
 - **Dual-arm support**: launch left and right arms with separate CAN interfaces
-- **Topic-compatible** with existing downstream nodes — no changes required
+- **Topic compatibility**: topics and message types are unchanged; unnamed commands retain their position order, while named commands are validated and reordered by CAN ID
 - **System dependency support**: compatible with NumPy 1.x and ROS2 Pinocchio; see the environment guide
 
 ## Prerequisites
@@ -163,19 +163,18 @@ When `auto_enable: true`, the node executes this sequence on startup:
 ```
 1. Create SDK instance → auto-checks communication with all 7 motors
 2. disable() → clear old state
-3. Wait 0.1s → ensure motors finish processing disable
+3. Wait 0.1s → retain disable transmission allowance
 4. enable() → reset_error + set_control_mode(PP) + enable motors
-5. Wait 0.2s → ensure all motors complete enable
+5. Wait 0.2s → retain enable transmission allowance
 6. set_velocities(slow) → set slow speed
 7. Run cancellable home in a worker; admit streaming only after completion
-8. Enter control loop → publish state at 100Hz
+8. State publishing and services are established before startup tasks and remain available during home
 9. On control command → set_angles() streaming
-10. Ctrl+C → disable() → wait 0.5s → close()
+10. Ctrl+C → cancel tasks → disable() → wait for workers and transmission allowance → close()
 ```
 
-> The wait times (steps 3, 5, 10) ensure CAN frames are fully sent before proceeding,
-> avoiding timing issues in the ROS2 multi-threaded environment.
-> This strategy applies to both A7 and A7Lite arms.
+> Steps 3, 5 and 10 retain transmission allowances, rather than device acknowledgements;
+> the lifecycle applies to A7, A7lite and P7.
 
 ### Speed Management
 
@@ -204,6 +203,12 @@ When `auto_enable: true`, the node executes this sequence on startup:
 - Left arm: `["61", "62", "63", "64", "65", "66", "67"]`
 - Right arm: `["51", "52", "53", "54", "55", "56", "57"]`
 
+Control messages must contain seven finite positions. A non-empty `name` must contain
+exactly the seven CAN ID names for the configured arm, each once. Any order is accepted;
+the node reorders positions by name. Unknown, duplicate or missing names and mismatched
+lengths reject the entire command without changing filter history or accepted-command
+timestamps. Empty `name` retains the fixed position order above.
+
 ## Services
 
 All services use `std_srvs/srv/Trigger`, namespaced under the node name.
@@ -222,6 +227,9 @@ returns. One normal task runs at a time; overlapping normal requests return busy
 Disable/emergency-stop cancels the active home, whose response reports failure.
 State publishing continues. Streaming resumes only after a successful explicit
 home or enable. SDK/backend latency still applies to software stop calls.
+The A7lite SDK pinned in the source manifest also latches its stop instead of restoring motion after two seconds.
+Explicit `enable()` or a successful `home()` / `home_cancellable()` is required before it
+accepts targets again.
 
 Startup/enable failures attempt disable and close; a closed connection requires a
 node restart. Install the exact arm/transport sources in
@@ -234,7 +242,7 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `arm_type` | string | `"a7"` | Arm model: `"a7"` or `"a7lite"` |
+| `arm_type` | string | `"a7"` | Arm model: `"a7"`, `"a7lite"` or `"p7"` |
 | `auto_enable` | bool | `true` | Auto disable → enable → slow homing on startup |
 | `calibrate_zero` | bool | `false` | Calibrate zero before enabling |
 | `left_arm` | string | `"can1"` | Left arm CAN interface |
@@ -245,6 +253,17 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 | `normal_max_velocity` | double | `3.0` | Normal speed limit (rad/s) |
 | `startup_delay` | double | `2.0` | Seconds after first command before switching to normal speed |
 | `filter_window` | int | `1` | Moving average filter window size |
+
+Parameters are validated before constructing the SDK or opening CAN. `side` must be
+`left` / `right`, `arm_type` must select a registered model, `world_frame` must be
+`urdf` / `maestro`, and the CAN interface name must be non-empty. Auto-enable and startup
+calibration switches must be booleans; `filter_window` must be a positive integer.
+`publish_rate` must be finite and positive with a representable ROS nanosecond timer
+period; `cmd_timeout` must be finite and positive; `startup_delay` must be finite and
+non-negative. Homing `slow_max_velocity` is in `(0, 50]` rad/s and `normal_max_velocity`
+is in `[0, 50]` rad/s. `position_kp` must be finite, non-negative and representable as
+float32; `tcp_offset` must contain three finite numbers. A zero-speed configuration does
+not override the SDK's positive-speed requirement for nonzero motion.
 
 ## Joint Limits
 
@@ -313,12 +332,23 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 | | `set_angles()` | `move_j()` |
 |---|---|---|
 | Purpose | External control command streaming (100 Hz) | Point-to-point motion |
-| Motion guard | None | Yes (blocked while moving) |
-| Motion timer | Not started | Started (estimates completion) |
-| Underlying call | `_set_angles()` | `_set_angles()` + timer |
-| Control mode | PP | PP |
+| Task admission | Node gate and model-specific SDK checks | SDK point-motion checks |
+| Motion task | No point-motion task | Timer or trajectory task, depending on model |
+| Underlying call | `_set_angles()`, with automatic P7 limiting | SDK planned/timed target submission |
+| Control mode | SDK PP interface; P7 J6/J7 use PTM | SDK PP interface; P7 J6/J7 use PTM |
 
 This node uses `set_angles()` for streaming control; `move_j()` is only used internally by `home()`.
+
+The SDK pinned in the source manifest bounds P7 external streaming targets using the configured per-joint velocity
+and acceleration, including J6/J7. The first frame of a new or resumed stream seeds
+its state from measured positions and holds there. Continue sending periodic external
+commands to approach the requested target; one message does not complete a point move.
+The SDK uses monotonic time and the actual interval between accepted targets to compute
+velocity and acceleration bounds. These bounds apply to the submitted target trajectory,
+rather than guaranteeing measured motor speed or physical arrival.
+
+See the [environment guide](docs/environment_setup.md#独立工具与检查边界) for standalone
+calibration checks, signal cancellation and per-instance cleanup.
 
 An "external control command" is a `JointState` message published by an external program to
 `left_arm_joint_control` or `right_arm_joint_control`, with target angles for all seven joints.

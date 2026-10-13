@@ -3,11 +3,25 @@
 ROS2 直接依赖 `linkerbot-arm>=0.6.0,<0.7.0`，Python 导入为 `linkerbot_arm`。
 无需完整 SDK 聚合包或 hand 包；三个独立包使用不同命名空间，可以共存安装。
 
+## 获取 ROS2 源码
+
+仓库已迁移到 [linker-bot/linkerbot-arm-ros2](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2)，
+默认分支为 `main`。以下以 `~/linkerbot_ws` 为工作空间，需要公司 Gitea 访问权限：
+
+```bash
+mkdir -p ~/linkerbot_ws/src
+git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2.git ~/linkerbot_ws/src/linkerbot-arm-ros2
+```
+
+已有 checkout 可保留原目录名，将 `origin` 更新为上述地址后切换、同步 `main`，
+并按实际路径调整后续命令。仓库名为 `linkerbot-arm-ros2`，ROS2 包名仍为 `linker_arm_ros2`。
+SDK 源码仓库名为 `linkerbot-arm-python`，发行包和导入仍为 `linkerbot-arm`、`linkerbot_arm`。
+
 ## 运行依赖
 
 - A7、A7lite、P7 导入时需要 NumPy/SciPy，构造时均创建 `ArmKinetix` 并加载 Pinocchio。
 - 即使只使用关节控制，也需要 Pinocchio；源码加载同样需要完整运行依赖。
-- arm 固定依赖 `linkerbot-transport[can]==1.0.0`；ROS2 无需维护另一份通信实现。
+- arm 依赖 `linkerbot-transport[can]`，不限制 transport 版本号或 tag；ROS2 无需维护另一份通信实现。
 - SDK 基础依赖要求 NumPy >=1.24、SciPy >=1.10、Pydantic 2.x、python-can >=4.6.1。
 
 ## ROS2 系统依赖方案
@@ -26,23 +40,26 @@ source /opt/ros/jazzy/setup.bash
 source /path/to/ros-arm-venv/bin/activate
 ```
 
-当前节点的可取消生命周期需要配套的 arm/transport 源码。使用已有 SSH 权限安装本仓库
-[requirements/source-versions.txt](../requirements/source-versions.txt) 固定的提交；
-版本号相同的旧 wheel 可能不包含所需能力。arm checkout 也须使用清单中的提交，
-确保包含对应的 Jazzy 部署锁与安装诊断。
+当前节点的可取消生命周期需要配套的 arm/transport 源码。本仓库的
+[requirements/source-versions.txt](../requirements/source-versions.txt) 使用新组织下的地址，
+arm 固定到已合并的安全及 transport 兼容修复提交，transport 从 `main` 安装，
+不固定版本号、tag 或旧提交。源码清单通过 SSH 获取依赖，需要相应 SSH 权限。
+arm checkout 也须使用清单中的提交，以使用配套的 Jazzy 部署锁。
 
 ```bash
-# 从 ROS2 的固定源码清单读取 arm 提交，使用同一版本提供的部署锁。
-ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' /path/to/linker_arm_ros2/requirements/source-versions.txt)
-git clone ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-arm.git /path/to/linkerbot-arm
-git -C /path/to/linkerbot-arm checkout "$ARM_SOURCE_COMMIT"
-python -m pip install -c /path/to/linkerbot-arm/constraints/ros-jazzy.txt \
-  -r /path/to/linker_arm_ros2/requirements/source-versions.txt
+# 从 ROS2 源码清单读取 arm 提交，使用同一版本提供的部署锁。
+ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' ~/linkerbot_ws/src/linkerbot-arm-ros2/requirements/source-versions.txt)
+git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python.git /path/to/linkerbot-arm-python
+git -C /path/to/linkerbot-arm-python checkout "$ARM_SOURCE_COMMIT"
+python -m pip install --force-reinstall -c /path/to/linkerbot-arm-python/constraints/ros-jazzy.txt \
+  -r ~/linkerbot_ws/src/linkerbot-arm-ros2/requirements/source-versions.txt
 ```
 
-也可将 transport 和 arm 分别检出到清单中的提交，在同一 Python 环境先后执行
-`pip install -e /path/to/linkerbot-transport` 和 `pip install -e /path/to/linkerbot-arm`，
-并使用适合当前 ROS2 二进制环境的约束。节点在创建 SDK 对象前检查 `home_cancellable`，
+`--force-reinstall` 确保已有 transport 也从当前源码重新安装，不依赖其版本号变化。
+也可将 transport 检出到当前 `main`、arm 检出到清单中的提交，在同一环境先后执行
+`python -m pip install -e '/path/to/linkerbot-transport[can]'` 和
+`python -m pip install -c /path/to/linkerbot-arm-python/constraints/ros-jazzy.txt -e /path/to/linkerbot-arm-python`。
+节点在创建 SDK 对象前检查 `home_cancellable`，
 缺少时明确提示更新，不会打开 CAN 或尝试旧的不可取消回零。
 
 APT 包提供 `pinocchio` 模块，但没有 PyPI `pin` 发行元数据；上述安装使用基础 SDK，
@@ -57,7 +74,7 @@ Pinocchio 的基础包同样提供运动学。
 `/usr/bin/colcon` 时，在激活上述 venv 后，从工作空间用当前 Python 执行该入口：
 
 ```bash
-cd /path/to/ros-workspace
+cd ~/linkerbot_ws
 python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
 head -n 1 install/linker_arm_ros2/lib/linker_arm_ros2/arm_node
 python -c "import sys; print(sys.executable)"
@@ -81,13 +98,15 @@ SciPy >=1.15.3，与上述部署锁无交集，需要继续使用时保留其独
 所有运行依赖已经安装时，可以设置：
 
 ```bash
-export LINKERBOT_ARM_SRC=/path/to/linkerbot-arm/src
+export LINKERBOT_ARM_SRC=/path/to/linkerbot-arm-python/src
 ```
 
-也接受仓库根目录。自动发现支持并列仓库和 colcon 工作空间布局：
+也接受仓库根目录。推荐将 SDK 安装到节点实际使用的 Python 环境。
+新目录名 `linkerbot-arm-python` 需先安装或设置上述变量；自动发现仍只识别旧目录名
+`linkerbot-arm`，支持并列仓库和以下 colcon 工作空间布局：
 
 ```text
-workspace/src/linker_arm_ros2/
+workspace/src/linkerbot-arm-ros2/
 workspace/src/linkerbot-arm/
 ```
 

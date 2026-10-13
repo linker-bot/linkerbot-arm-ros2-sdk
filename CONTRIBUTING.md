@@ -1,11 +1,12 @@
-# 协作流程（linker_arm_ros2）
+# 协作流程（linkerbot-arm-ros2）
 
-> 面向本仓库贡献者的日常使用说明。所有改动都通过 **Issue → 分支 → PR → 审批合并** 完成，**禁止直接向 `master` 推送**。
+> 面向本仓库贡献者的日常使用说明。所有改动都通过 **Issue → 分支 → PR → 审批合并** 完成，**禁止直接向 `main` 推送**。
 
 ## 本仓库特点
 
-- **只有一条长期分支 `master`**（默认分支），没有下游定制分支。
-- **PR 的目标分支(base)恒为 `master`**——不需要在多个分支间做选择。
+- 仓库地址为 [linker-bot/linkerbot-arm-ros2](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2)，ROS2 包名仍为 `linker_arm_ros2`。
+- **长期分支为 `main`**（默认分支），没有下游定制分支。
+- **PR 的目标分支(base)为 `main`**。
 - **暂无 CI**（自动检查待补充）。
 
 ---
@@ -71,10 +72,10 @@ config(a7lite): 调整零位标定参数
 
 在 Gitea 上新建 issue，写清：背景、涉及改动、验收标准。拿到 issue 编号 `#N`。
 
-### 步骤 2 · 从 master 切工作分支
+### 步骤 2 · 从 main 切工作分支
 
 ```bash
-git checkout master && git pull
+git checkout main && git pull --ff-only
 git checkout -b feat/N-简短描述          # 例: feat/12-p7-slave-arm
 ```
 
@@ -93,7 +94,7 @@ git push -u origin feat/N-简短描述
 
 在 Gitea 上开 PR：
 
-- **base(目标分支)** 选 `master`。
+- **base(目标分支)** 选 `main`。
 - 标题遵循提交信息规范。
 - 正文写 **`Closes #N`**，合并后 Gitea 自动关闭对应 issue。正文模板：
 
@@ -114,17 +115,17 @@ git push -u origin feat/N-简短描述
 - 需 **至少 1 个同事 Approve** 才能合并（PR 作者不能审批自己）。
 - 有人 "Request changes" 会阻止合并，直到问题解决。
 - 推了新提交后，旧的批准会作废、需重新审批。
-- 审批通过后点 **合并**，方式选 **Squash**（把工作分支的多个提交压成一个干净提交进 master）。
+- 审批通过后点 **合并**，方式选 **Squash**（把工作分支的多个提交压成一个干净提交进 main）。
   - ⚠️ 审批 ≠ 自动合并。批准只解锁合并按钮，仍需有人点合并；或在 PR 上开启 "Auto Merge"。
 - 合并后 **删除工作分支**。
 
-### 分支落后于 master 时
+### 分支落后于 main 时
 
-若开着 PR 期间 `master` 前进了，先把 master 同步进你的分支再合并：
+若开着 PR 期间 `main` 前进了，先把 main 同步进你的分支再合并：
 
 ```bash
 git checkout feat/N-简短描述
-git pull origin master        # 解决冲突后提交
+git pull origin main        # 解决冲突后提交
 git push
 ```
 
@@ -136,8 +137,8 @@ git push
 
 | 错误做法 | 正确做法 |
 |----------|----------|
-| 直接 `git push` 到 `master` | 一律走 PR，master 禁止直接推送 |
-| PR 里堆一堆零碎提交直接 merge | 用 Squash 合并，保持 master 历史干净 |
+| 直接 `git push` 到 `main` | 一律走 PR，main 禁止直接推送 |
+| PR 里堆一堆零碎提交直接 merge | 用 Squash 合并，保持 main 历史干净 |
 | 忘记在 PR 写 `Closes #N` | 写上，合并后自动关闭 issue |
 | 分支不带 issue 编号、命名随意 | 按 `<类型>/<issue编号>-<描述>` 命名 |
 | 合并后不删工作分支 | 合并后删除，避免分支堆积 |

@@ -1,8 +1,12 @@
-# linker_arm_ros2
+# LinkerBot Arm ROS2
 
 [中文文档](README.md)
 
-ROS2 Python package for controlling LinkerBot robotic arms (A7 / A7 Lite / P7) via [linkerbot-arm](https://gitea.linkerhub.work/zhuzhixiang/linkerbot-arm).
+ROS2 Python package for controlling LinkerBot robotic arms (A7 / A7 Lite / P7) via [linkerbot-arm-python](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python).
+
+The source repository is [linker-bot/linkerbot-arm-ros2](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2),
+with `main` as its default branch. The ROS2 package and Python import remain
+`linker_arm_ros2`; the SDK distribution and import remain `linkerbot-arm` and `linkerbot_arm`.
 
 This package provides a unified ROS2 communication layer for both A7 and A7 Lite arms. The SDK handles all CAN bus communication, protocol encoding/decoding, and motor management internally — this package simply bridges the SDK API to standard ROS2 topics and services.
 
@@ -33,17 +37,24 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 - CAN interface configured and active (e.g. `can0`, `can1`)
 - `linkerbot-arm` 0.6.x, imported as `linkerbot_arm`; see [environment setup](docs/environment_setup.md) for package and source installation
 - Pinocchio built for the selected NumPy version; see the environment guide
-- numpy, scipy, python-can, pydantic and `linkerbot-transport[can]==1.0.0` in the same Python environment;
-  install the matching arm/transport commits from this repository's
-  [source manifest](requirements/source-versions.txt). See [environment setup](docs/environment_setup.md#ros2-系统依赖方案).
+- numpy, scipy, python-can, pydantic and `linkerbot-transport[can]` in the same Python environment;
+  use this repository's [source manifest](requirements/source-versions.txt), which pins
+  arm safety/transport compatibility fixes and installs transport from `main` without a version or tag constraint.
+  See [environment setup](docs/environment_setup.md#ros2-系统依赖方案).
 
 ## Build
 
-```bash
-cd ~/linkerbot_data_collection/linkerhand_data_collection_ws
+For a new checkout, clone `main` into the example workspace `~/linkerbot_ws`:
 
-# Install the independent arm SDK first and use colcon from the same Python environment.
-# Source deployments may place linkerbot-arm at src/linkerbot-arm.
+```bash
+mkdir -p ~/linkerbot_ws/src
+git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2.git ~/linkerbot_ws/src/linkerbot-arm-ros2
+```
+
+Install the matching SDK and activate the venv following [environment setup](docs/environment_setup.md), then build:
+
+```bash
+cd ~/linkerbot_ws
 
 # Activate the venv from the environment guide, then run Ubuntu Jazzy's colcon with its Python
 python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
@@ -358,10 +369,13 @@ An "external control command" is a `JointState` message published by an external
 The adapter, calibration tool and lifecycle script share `sdk_loader.py`:
 
 1. `linkerbot_arm` importable in the current Python environment, including an installed package or an existing Python search path.
-2. `LINKERBOT_ARM_SRC=/path/to/linkerbot-arm/src`; repository roots are also accepted.
+2. `LINKERBOT_ARM_SRC=/path/to/linkerbot-arm-python/src`; repository roots are also accepted.
 3. When the new variable is unset, `LINKERBOT_SDK_SRC` remains a compatibility alias;
    its path must also provide the new `linkerbot_arm` package, and using it prints a migration warning.
-4. A `linkerbot-arm` checkout beside the ROS2 repository or under an ancestor workspace's `src/`.
+4. A checkout using the old directory name `linkerbot-arm`, beside the ROS2 repository or under an ancestor workspace's `src/`.
+
+The new `linkerbot-arm-python` directory name is not discovered automatically. Install it
+in the current Python environment or explicitly set `LINKERBOT_ARM_SRC` as shown above.
 
 The node and tools load only `linkerbot_arm`. Both source variables accept only this
 namespace; legacy `linkerbot` source and installed packages are not fallback sources.
@@ -383,7 +397,7 @@ SDK `constraints/ros-jazzy.txt` pins NumPy and SciPy; APT provides Pinocchio and
 | Dependency | Version and source |
 |-----------|---------|
 | linkerbot-arm | 0.6.x; use the commit in `requirements/source-versions.txt` |
-| linkerbot-transport | 1.0.0; use the commit in the same source manifest |
+| linkerbot-transport | `main` in the new organization; no version, tag or old commit pin |
 | NumPy | Jazzy deployment lock: 1.26.4 |
 | SciPy | Validated venv: 1.13.1; Ubuntu system package: 1.11.4 |
 | Pydantic | 2.x |
@@ -401,7 +415,7 @@ cannot share this Jazzy deployment lock; keep it in its own environment.
 ## File Structure
 
 ```
-linker_arm_ros2/
+linkerbot-arm-ros2/
 ├── package.xml                  # ROS2 package manifest
 ├── setup.py                     # Python package setup
 ├── setup.cfg                    # Install script paths

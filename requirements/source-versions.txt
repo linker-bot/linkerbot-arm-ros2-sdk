@@ -1,4 +1,4 @@
-# Personal-fork source baseline with lifecycle/command fixes and Jazzy installation profile.
-# Pin SDK safety fixes including stalled P7 point timing and repeated-interrupt cleanup.
-linkerbot-transport[can] @ git+ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-transport.git@7ebe2a5c7380a1d3712444149f7f253c4ebc2836
-linkerbot-arm @ git+ssh://git@git.linkerhub.work:12222/zhuzhixiang/linkerbot-arm.git@ee235e7e86f1a30d7b3ade11dcf4b31528cc6701
+# Source baseline with lifecycle/command fixes and the Jazzy installation profile.
+# Pin arm safety/transport compatibility fixes; use current transport main without a version/tag pin.
+linkerbot-transport[can] @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-transport.git@main
+linkerbot-arm @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-arm-python.git@e968358b22c1879853d1eba17735c54110c3c674

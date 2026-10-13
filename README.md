@@ -1,8 +1,12 @@
-# linker_arm_ros2
+# LinkerBot Arm ROS2
 
 [English](README_EN.md)
 
-基于 [linkerbot-arm](https://gitea.linkerhub.work/zhuzhixiang/linkerbot-arm) 的 ROS2 机械臂控制包，支持 LinkerBot A7、A7 Lite 和 P7 三款 7 自由度机械臂。
+基于 [linkerbot-arm-python](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python) 的 ROS2 机械臂控制包，支持 LinkerBot A7、A7 Lite 和 P7 三款 7 自由度机械臂。
+
+源码仓库为 [linker-bot/linkerbot-arm-ros2](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2)，
+默认分支为 `main`。仓库改名后，ROS2 包名和 Python 导入仍为 `linker_arm_ros2`；
+SDK 发行包和导入仍为 `linkerbot-arm`、`linkerbot_arm`。
 
 本包提供统一的 ROS2 通信层，同时支持 A7、A7 Lite 和 P7 三款机械臂。SDK 内部已封装 CAN 总线通信、协议编解码、电机管理等底层功能，本包仅负责将 SDK API 桥接到标准的 ROS2 Topic 和 Service。
 
@@ -31,17 +35,24 @@
 - CAN 接口已配置并激活（如 `can0`、`can1`）
 - `linkerbot-arm` 0.6.x（导入 `linkerbot_arm`），安装或源码部署方式见 [环境配置](docs/environment_setup.md)
 - Pinocchio 与 NumPy 的二进制版本匹配，详见环境说明
-- 同一 Python 环境已安装 SDK 依赖：NumPy、SciPy、Pydantic 及 `linkerbot-transport[can]==1.0.0`；
-  按本仓库的[固定源码清单](requirements/source-versions.txt)安装配套 arm/transport，
+- 同一 Python 环境已安装 SDK 依赖：NumPy、SciPy、Pydantic 及 `linkerbot-transport[can]`；
+  按本仓库的[源码清单](requirements/source-versions.txt)安装配套 arm/transport，
+  arm 固定到包含安全及 transport 兼容修复的提交，transport 使用 `main`，不限制版本号或 tag，
   详见[环境配置](docs/environment_setup.md#ros2-系统依赖方案)
 
 ## 构建
 
-```bash
-cd ~/linkerbot_data_collection/linkerhand_data_collection_ws
+首次安装先获取 `main` 源码，以下示例使用 `~/linkerbot_ws` 作为工作空间：
 
-# 先按环境配置安装独立 arm SDK，使用同一 Python 环境中的 colcon。
-# 源码部署时，也可将 linkerbot-arm 放到 src/linkerbot-arm。
+```bash
+mkdir -p ~/linkerbot_ws/src
+git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2.git ~/linkerbot_ws/src/linkerbot-arm-ros2
+```
+
+按[环境配置](docs/environment_setup.md)安装配套 SDK 并激活 venv 后，再构建 ROS2 包：
+
+```bash
+cd ~/linkerbot_ws
 
 # 激活按环境配置创建的 venv，再用该 Python 执行 Ubuntu Jazzy 的 colcon 入口
 python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
@@ -344,9 +355,12 @@ SDK 使用单调时钟，按相邻受理目标之间的实际时间间隔计算�
 适配器、标定和生命周期脚本共用 `sdk_loader.py`，加载顺序为：
 
 1. 当前 Python 环境可导入的 `linkerbot_arm`（包括已安装包及已配置的 Python 搜索路径）。
-2. `LINKERBOT_ARM_SRC=/path/to/linkerbot-arm/src`，也接受仓库根目录。
+2. `LINKERBOT_ARM_SRC=/path/to/linkerbot-arm-python/src`，也接受仓库根目录。
 3. 未设置新变量时，兼容 `LINKERBOT_SDK_SRC`；其路径也必须提供新 `linkerbot_arm`，使用时输出迁移提示。
-4. ROS2 仓库旁或祖先工作空间 `src/` 下的 `linkerbot-arm`。
+4. ROS2 仓库旁或祖先工作空间 `src/` 下的旧目录名 `linkerbot-arm`。
+
+新目录名 `linkerbot-arm-python` 不在自动发现范围内，需安装到当前 Python 环境，
+或显式设置上述 `LINKERBOT_ARM_SRC`。
 
 节点和工具只加载 `linkerbot_arm`。新旧两个源码变量都只接受该命名空间，
 不再解析旧完整 SDK 的 `linkerbot` 源码，也不将已安装的旧 `linkerbot` 作为回退来源。
@@ -367,7 +381,7 @@ ROS2 系统 Pinocchio/NumPy 组合与 PyPI `kinetix` extra 的二进制依赖应
 | 依赖 | 版本与来源 |
 |------|------|
 | linkerbot-arm | 0.6.x，使用 `requirements/source-versions.txt` 指定的源码提交 |
-| linkerbot-transport | 1.0.0，使用同一源码清单指定的提交 |
+| linkerbot-transport | 新组织仓库的 `main`，不固定版本号、tag 或旧提交 |
 | NumPy | Jazzy 部署锁：1.26.4 |
 | SciPy | 已验证 venv：1.13.1；Ubuntu 系统包为 1.11.4 |
 | Pydantic | 2.x |
@@ -383,7 +397,7 @@ SciPy <1.14 范围，并非所有 ROS2 版本的硬性要求。当前旧完整 S
 ## 文件结构
 
 ```
-linker_arm_ros2/
+linkerbot-arm-ros2/
 ├── package.xml                  # ROS2 包清单
 ├── setup.py                     # Python 打包配置
 ├── setup.cfg                    # 安装脚本路径

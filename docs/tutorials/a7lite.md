@@ -1,0 +1,102 @@
+# A7 Lite ROS2 功能指南
+
+当前 ROS2 路径使用 PP 位置控制，使能时设置全臂位置 KP。 本教程适用于 Humble 与 Jazzy，提供单臂配置、目标、反馈和停止示例。
+
+先完成[安装与构建](../INSTALLATION.md)、[CAN 连接](../getting_started.md)，再使用以下功能。默认示例为左臂；同一硬件只运行一个控制进程。
+
+## 关节顺序
+
+| 臂侧 | J1 到 J7 的名称 | 话题前缀 / 服务节点 |
+| --- | --- | --- |
+| 左臂 | `61, 62, 63, 64, 65, 66, 67` | `/left_arm_joint_*` / `/left_arm_node` |
+| 右臂 | `51, 52, 53, 54, 55, 56, 57` | `/right_arm_joint_*` / `/right_arm_node` |
+
+位置用 rad、速度用 rad/s、力矩用 N·m。左右臂使用各自的模型和限位，相同角度不表示镜像动作。
+
+<a id="configuration"></a>
+
+## 型号配置与启动
+
+在 `config/arm_config.yaml` 修改以下字段，保留其余参数：
+
+```yaml
+arm_type: "a7lite"
+auto_enable: false
+calibrate_zero: false
+left_arm: "can0"
+right_arm: "can1"
+position_kp: 25.0
+```
+
+接口按实际设备替换。修改后[重新构建](../getting_started.md#configure)，并在已激活环境的终端启动：
+
+```bash
+ros2 launch linker_arm_ros2 single_arm.launch.py
+```
+
+右臂另一次启动使用 `side:=right`。双臂使用 `dual_arm.launch.py`，两臂共用 YAML 中的 `arm_type`；当前双臂 launch 不配置混合型号。单臂 launch 没有 `arm_type` 参数。
+
+<a id="joint-control"></a>
+
+## 使能与关节控制
+
+使能服务会失能、使能并慢速回零。确认回零路径和机械臂周围空间后，在另一个已激活环境的终端执行，并等待 `success: true`：
+
+```bash
+ros2 service call /left_arm_node/enable std_srvs/srv/Trigger '{}'
+```
+
+下面目标从已确认的零位将 J1 设为 `0.05 rad`，其余关节保持零位；仅演示消息格式，执行前仍须检查限位、姿态和路径。保持发布并通过反馈检查实际位置：
+
+```bash
+ros2 topic pub --rate 50 /left_arm_joint_control sensor_msgs/msg/JointState \
+  '{name: ["61", "62", "63", "64", "65", "66", "67"], position: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}'
+```
+
+右臂改用本臂话题和关节名称：
+
+```bash
+ros2 topic pub --rate 50 /right_arm_joint_control sensor_msgs/msg/JointState \
+  '{name: ["51", "52", "53", "54", "55", "56", "57"], position: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}'
+```
+
+只执行对应臂的一条发布命令。节点只使用 `name`、`position`，不使用消息中的速度或力矩配置控制；具名重排、速度切换、滤波和拒绝条件见[话题与关节控制](../topics.md)。
+
+<a id="state-feedback"></a>
+
+## 状态与反馈
+
+```bash
+ros2 topic echo /left_arm_joint_state --once
+ros2 topic hz /left_arm_joint_state
+```
+
+右臂改为 `/right_arm_joint_state`。消息包含七关节位置、速度和力矩；不完整或过期时暂停发布，重复缓存可能重复时间戳。发布频率不是设备采样频率；反馈的完整性和接收年龄决定是否发布。 `header.stamp` 与超时恢复规则见[反馈有效性](../feedback.md)。
+
+<a id="stop-and-resume"></a>
+
+## 停止、恢复与标定
+
+先在目标发布终端按 Ctrl+C，再调用软件停止；停止锁存后不再接受目标：
+
+```bash
+ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger '{}'
+```
+
+需要恢复时显式调用 `enable`（包含回零）或成功执行 `home`。`cmd_timeout` 只回退慢速，不会自动停止或失能。结束使用时调用失能服务，再在 launch 终端按 Ctrl+C；检查清理日志：
+
+```bash
+ros2 service call /left_arm_node/disable std_srvs/srv/Trigger '{}'
+```
+
+右臂服务改为 `/right_arm_node/...`。回零、错误重置、零位写入及并发限制见[生命周期服务](../services.md)。独立标定和生命周期脚本支持本型号，但须先停止 ROS2 节点，避免两个程序控制同一设备。 具体操作见[标定与诊断工具](../tools.md)。
+
+<a id="model-notes"></a>
+
+## 型号差异与接口边界
+
+`position_kp` 仅对 A7 Lite 生效，并在使能流程中写入七个关节；仓库的 `25.0` 是当前配置值，不是所有负载的通用推荐值。修改后重新构建并重启，不能靠 `ros2 param set` 更新正在运行的控制。SDK 的 MIT、CSP 和混合控制尚未暴露为 ROS2 话题，不能把 `JointState.effort` 当作 MIT 力矩指令。
+
+ROS2 没有暴露 SDK 的全部设备能力。需要更底层的型号 API 时使用机械臂 SDK，并先关闭控制该设备的 ROS2 节点。
+
+[返回总览](../environment_setup.md#models) · [故障排查](../troubleshooting.md)

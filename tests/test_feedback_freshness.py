@@ -6,6 +6,7 @@ from dataclasses import replace
 from unittest.mock import Mock
 
 import can
+import numpy as np
 import pytest
 
 pytest.importorskip("rclpy")
@@ -70,7 +71,7 @@ def test_repeated_cache_keeps_stamp_then_expires_and_recovers(node):
     node.arm.get_feedback.return_value = sample(100.005)
     advance(node)
     node._publish_state()
-    assert node.state_pub.publish.call_count == 1
+    assert node.state_pub.publish.call_count == 1, node._feedback_problem
     first_stamp = stamp(node)
     msg = node.state_pub.publish.call_args.args[0]
     assert list(msg.position) == [1.0] * 7
@@ -93,6 +94,20 @@ def test_repeated_cache_keeps_stamp_then_expires_and_recovers(node):
     assert node._feedback_problem is None
     node.arm.get_angles.assert_not_called()
     node.arm.get_state.assert_not_called()
+
+
+@pytest.mark.parametrize("number", [int, float, np.float32])
+def test_numeric_feedback_is_published_as_ros_float64(node, number):
+    joint = JointFeedback(number(1), number(2), number(3), 100.005, 100.005, 100.005)
+    node.arm.get_feedback.return_value = ArmFeedback((joint,) * 7, True)
+    advance(node)
+    node._publish_state()
+    assert node.state_pub.publish.call_count == 1, node._feedback_problem
+    message = node.state_pub.publish.call_args.args[0]
+    for field, expected in ((message.position, 1.0), (message.velocity, 2.0),
+                            (message.effort, 3.0)):
+        assert list(field) == [expected] * 7
+        assert all(isinstance(value, float) for value in field)
 
 
 @pytest.mark.parametrize(

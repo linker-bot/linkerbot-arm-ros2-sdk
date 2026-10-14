@@ -1,5 +1,5 @@
-# Paired arm source with main safety fixes and feedback freshness; see docs/environment_setup.md.
-# Pin the verified SDK PR #41 squash-merge commit on main.
+# Paired arm source with checked lifecycle/configuration sends and original feedback reception times.
+# Pin the verified SDK PR #44 squash-merge commit on main; see docs/environment_setup.md.
 # Use current transport main without a version/tag pin.
 linkerbot-transport[can] @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-transport.git@main
-linkerbot-arm @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-arm-python.git@afb821c5090fec83c84ceb6861861b1c0112338b
+linkerbot-arm @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-arm-python.git@d9b72db0230c2713b4eb82ab46f92e3ac14181bb

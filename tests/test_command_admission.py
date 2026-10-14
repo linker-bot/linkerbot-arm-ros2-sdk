@@ -1,6 +1,7 @@
 """Real ROS node with failing SDK admission and a deterministic command clock."""
 
 import copy
+import threading
 from queue import Full
 from types import SimpleNamespace
 from unittest.mock import Mock, call
@@ -14,9 +15,13 @@ from sensor_msgs.msg import JointState
 
 from linker_arm_ros2 import arm_node
 
+# arm_node must bootstrap source SDK discovery before importing SDK classes.
+# isort: split
+from linkerbot_arm.exceptions import CANError
+
 
 @pytest.fixture
-def node(monkeypatch):
+def node(monkeypatch, wait_for_tasks):
     import can
 
     def forbid_can(*args, **kwargs):
@@ -33,6 +38,7 @@ def node(monkeypatch):
     node = arm_node.ArmNode()
     node.enabled = True
     node.test_time = 10.0
+    node.wait_for_tasks = lambda: wait_for_tasks(node)
     monkeypatch.setattr(
         node,
         "get_clock",
@@ -49,6 +55,7 @@ def command(node, values):
     msg = JointState()
     msg.position = [float(values)] * 7 if isinstance(values, (int, float)) else values
     node._cmd_callback(msg)
+    node.wait_for_tasks()
 
 
 def accepted_state(node):
@@ -150,6 +157,7 @@ def test_speed_transition_failure_stays_retryable_and_never_escapes(
     node.arm.set_velocities.side_effect = Full("partial speed write")
     before = accepted_state(node)
     node._update_speed_mode()
+    node.wait_for_tasks()
     assert accepted_state(node) == before
     assert node.normal_speed_active == normal_before
     assert node._speed_recovery_pending
@@ -158,11 +166,14 @@ def test_speed_transition_failure_stays_retryable_and_never_escapes(
     node.arm.set_angles.assert_not_called()
     node.arm.set_velocities.side_effect = None
     node._update_speed_mode()
+    node.wait_for_tasks()
     node.arm.set_velocities.assert_called_with([node.slow_max_velocity] * 7)
-    assert not node.has_first_cmd and not node.normal_speed_active
-    command(node, 0.4)
+    assert node.has_first_cmd and not node.normal_speed_active
+    node.arm.set_angles.assert_called_once_with([0.5] * 7)
+    assert node._filter_buffers == [[0.5] for _ in range(7)]
     assert node.first_cmd_time == Time(seconds=node.test_time)
-    assert node.arm.set_angles.call_args.args[0] == [0.4] * 7
+    command(node, 0.4)
+    assert node.arm.set_angles.call_args.args[0] == [0.45] * 7
 
 
 def test_failed_target_after_speed_recovery_does_not_resume_old_speed_timer(node):
@@ -171,6 +182,7 @@ def test_failed_target_after_speed_recovery_does_not_resume_old_speed_timer(node
     node.test_time += 0.2
     node.arm.set_velocities.side_effect = Full()
     node._update_speed_mode()
+    node.wait_for_tasks()
     before = accepted_state(node)
     node.arm.set_velocities.side_effect = None
     node.arm.set_angles.side_effect = Full()
@@ -178,8 +190,94 @@ def test_failed_target_after_speed_recovery_does_not_resume_old_speed_timer(node
     assert accepted_state(node) == before
     assert node._speed_recovery_pending
     node._update_speed_mode()
+    node.wait_for_tasks()
     assert not node.has_first_cmd and not node.normal_speed_active
     node.arm.set_velocities.assert_called_with([node.slow_max_velocity] * 7)
+
+
+@pytest.mark.parametrize("existing_stream", [False, True])
+@pytest.mark.parametrize(
+    "error_type", [Full, CANError, TimeoutError, KeyboardInterrupt]
+)
+def test_failed_home_speed_blocks_targets_until_complete_slow_retry(
+    node, existing_stream, error_type
+):
+    if existing_stream:
+        command(node, 0.2)
+        assert node._set_speed_mode(normal=True)
+    before = accepted_state(node)
+    error = error_type("partial home speed failure")
+    node.arm.set_velocities.side_effect = error
+    node.arm.reset_mock()
+
+    with pytest.raises(error_type) as raised:
+        node._home(threading.Event())
+    assert raised.value is error
+    assert node._speed_recovery_pending
+    assert not node._slow_speed_ready
+    assert accepted_state(node) == before
+    node.arm.home_cancellable.assert_not_called()
+
+    command(node, 0.4)
+    node.arm.set_angles.assert_not_called()
+    assert accepted_state(node) == before
+    node.arm.set_velocities.side_effect = None
+    node.arm.reset_mock()
+    node.test_time += 0.1
+    command(node, 0.8)
+    assert node.arm.mock_calls == [
+        call.set_velocities([node.slow_max_velocity] * 7),
+        call.set_angles([0.8] * 7),
+    ]
+    assert not node._speed_recovery_pending
+    assert not node.normal_speed_active
+    assert node.first_cmd_time == node.last_cmd_time == Time(seconds=node.test_time)
+
+
+def test_timer_recovers_failed_home_before_restarting_stream(node):
+    command(node, 0.2)
+    assert node._set_speed_mode(normal=True)
+    node.arm.set_velocities.side_effect = CANError("partial home speed failure")
+    with pytest.raises(CANError):
+        node._home(threading.Event())
+    node.arm.set_velocities.side_effect = None
+    node.arm.reset_mock()
+    node._update_speed_mode()
+    node.wait_for_tasks()
+    assert node.arm.mock_calls == [call.set_velocities([node.slow_max_velocity] * 7)]
+    assert not node._speed_recovery_pending
+    assert not node.has_first_cmd and not node.normal_speed_active
+    command(node, 0.8)
+    node.arm.set_angles.assert_called_once_with([0.8] * 7)
+
+
+def test_successful_home_restarts_filter_and_command_clocks(node):
+    command(node, 0.2)
+    assert node._set_speed_mode(normal=True)
+    node.arm.reset_mock()
+    cancel = threading.Event()
+    assert node._home(cancel) == "left arm homed"
+    assert node.arm.mock_calls == [
+        call.set_velocities([node.slow_max_velocity] * 7),
+        call.home_cancellable(cancel),
+    ]
+    assert not node.has_first_cmd and not node.normal_speed_active
+    command(node, 0.8)
+    node.arm.set_angles.assert_called_once_with([0.8] * 7)
+
+
+def test_stop_cancels_home_after_speed_configuration_before_motion(node):
+    command(node, 0.2)
+    cancel = threading.Event()
+    node.arm.set_velocities.side_effect = lambda values: cancel.set()
+    with pytest.raises(arm_node.TaskCancelled):
+        node._home(cancel)
+    node.arm.home_cancellable.assert_not_called()
+    node._stop(threading.Event(), disable=True)
+    node.arm.set_angles.reset_mock()
+    command(node, 0.8)
+    node.arm.set_angles.assert_not_called()
+    assert node._halted and not node.enabled
 
 
 def test_timeout_between_timer_ticks_starts_fresh_filter_at_slow_speed(node):

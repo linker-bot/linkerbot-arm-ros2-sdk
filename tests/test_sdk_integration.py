@@ -28,6 +28,9 @@ def copy_real_sdk(source):
 
 def run_without_legacy_sdk(code, tmp_path, *args, repo_root=REPO_ROOT):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # colcon's quiet/JUnit flags belong to the parent test run. Nested pytest
+    # must keep its own output and must not overwrite the parent's XML report.
+    env.pop("PYTEST_ADDOPTS", None)
     env.pop("LINKERBOT_ARM_SRC", None)
     env.pop("LINKERBOT_SDK_SRC", None)
     result = subprocess.run(

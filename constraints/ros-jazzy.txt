@@ -1,0 +1,7 @@
+# Ubuntu 24.04 / ROS 2 Jazzy / Python 3.12.
+# Keep the numerical profile consistent with the paired SDK's ros-jazzy.txt.
+# Use ROS APT Pinocchio, not the SDK's PyPI kinetix extra.
+numpy==1.26.4
+scipy==1.13.1
+# SDK/transport builds require >=77; colcon-core requires <80.
+setuptools>=77,<80

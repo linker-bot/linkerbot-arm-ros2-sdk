@@ -104,7 +104,9 @@ def test_zero_normal_speed_and_zero_startup_delay_remain_valid(ros, monkeypatch)
 
 
 @pytest.mark.parametrize("side", ["left", "right"])
-def test_named_targets_reorder_into_the_configured_can_order(ros, monkeypatch, side):
+def test_named_targets_reorder_into_the_configured_can_order(
+    ros, monkeypatch, side, wait_for_tasks
+):
     from sensor_msgs.msg import JointState
 
     sdk = Mock()
@@ -125,6 +127,7 @@ def test_named_targets_reorder_into_the_configured_can_order(ros, monkeypatch, s
         msg.name = list(reversed(node.joint_names))
         msg.position = list(reversed(expected))
         node._cmd_callback(msg)
+        wait_for_tasks(node)
         sdk.set_angles.assert_called_once_with(expected)
     finally:
         node.destroy_node()
@@ -135,7 +138,7 @@ def test_named_targets_reorder_into_the_configured_can_order(ros, monkeypatch, s
     [[], ["61"] * 7, [str(n) for n in range(60, 67)], [str(n) for n in range(61, 67)]],
 )
 def test_names_validation_preserves_fixed_order_compatibility_and_admission(
-    ros, monkeypatch, names
+    ros, monkeypatch, names, wait_for_tasks
 ):
     from sensor_msgs.msg import JointState
 
@@ -151,6 +154,7 @@ def test_names_validation_preserves_fixed_order_compatibility_and_admission(
             (node._filter_buffers, node._filter_sums, node.last_cmd_time)
         )
         node._cmd_callback(msg)
+        wait_for_tasks(node)
         if names:
             assert not sdk.mock_calls
             assert (

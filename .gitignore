@@ -9,6 +9,7 @@ dist/
 build/
 install/
 log/
+docker/results/
 
 # IDE / Editor
 .vscode/

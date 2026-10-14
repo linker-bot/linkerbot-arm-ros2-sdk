@@ -20,6 +20,7 @@ SDK 发行包和导入仍为 `linkerbot-arm`、`linkerbot_arm`。
 - **关节名称**：与电机 CAN ID 一致（左臂 61-67，右臂 51-57）
 - **生命周期服务**：使能、失能、回零、急停、错误重置、零位标定
 - **速度管理**：启动慢速 → 延迟后切换正常速度 → 超时无指令自动回退慢速
+  速度配置在现有后台 worker 中等待发送回执，指令回调和定时器继续返回，状态发布及停止请求仍可执行。
 - **指令拒绝与恢复**：非有限角度在滤波前拒绝；SDK 拒绝的目标不进入滤波历史，
   不刷新首条/最后有效命令计时。首次或恢复控制时先设置慢速，再提交目标。
   速度写入失败会暂停新目标准入，恢复全臂慢速配置后重新开始启动计时。
@@ -31,7 +32,7 @@ SDK 发行包和导入仍为 `linkerbot-arm`、`linkerbot_arm`。
 
 ## 前置条件
 
-- ROS2 Jazzy，已验证的部署组合使用 Python 3.12；Humble 需 Python 3.10，完整依赖组合尚未验证
+- ROS2 Humble（Ubuntu 22.04 / Python 3.10）或 Jazzy（Ubuntu 24.04 / Python 3.12）
 - CAN 接口已配置并激活（如 `can0`、`can1`）
 - `linkerbot-arm` 0.6.x（导入 `linkerbot_arm`），安装或源码部署方式见 [环境配置](docs/environment_setup.md)
 - Pinocchio 与 NumPy 的二进制版本匹配，详见环境说明
@@ -42,6 +43,11 @@ SDK 发行包和导入仍为 `linkerbot-arm`、`linkerbot_arm`。
   详见[环境配置](docs/environment_setup.md#ros2-系统依赖方案)
 
 ## 构建
+
+先按操作系统选择发行版：Ubuntu 22.04 使用 **Humble**，Ubuntu 24.04 使用 **Jazzy**。
+已有 Humble 用户无需升级系统；新装 Ubuntu 24.04 推荐 Jazzy。
+两者使用同一份节点/launch/配置，SDK 安装时按 `ROS_DISTRO` 选择对应 constraints。
+每个发行版使用独立 venv 与工作空间，不能混用 Python 或复用另一版本的构建结果。
 
 首次安装先获取 `main` 源码，以下示例使用 `~/linkerbot_ws` 作为工作空间：
 
@@ -55,7 +61,7 @@ git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ro
 ```bash
 cd ~/linkerbot_ws
 
-# 激活按环境配置创建的 venv，再用该 Python 执行 Ubuntu Jazzy 的 colcon 入口
+# 先 source 所选 ROS、激活其 venv，再用该 Python 执行系统 colcon 入口
 python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
 head -n 1 install/linker_arm_ros2/lib/linker_arm_ros2/arm_node
 python -c "import sys; print(sys.executable)"
@@ -66,6 +72,9 @@ source install/setup.bash
 仍须核对入口和生成节点的解释器，详见[环境配置](docs/environment_setup.md#ros2-系统依赖方案)。
 
 > 代码核对：ROS2 节点支持 P7；独立标定和生命周期脚本目前仍只支持 A7/A7lite。
+
+无硬件 Docker 验证分别覆盖 Humble 和 Jazzy，入口与源码获取方式见
+[docker/README.md](docker/README.md)。测试容器不透传 CAN 或其他设备。
 
 ## CAN 设备检测
 
@@ -233,14 +242,22 @@ CAN ID 名称，每个出现一次；允许任意顺序，节点按名称将角�
 | `~/reset_error` | 重置电机错误状态 |
 | `~/calibrate_zero` | 零位标定：将当前位置设为零位（需先失能） |
 
-任务执行期间，重复的使能/回零/标定请求返回 busy，不排队执行；流式目标暂不接受。
+生命周期任务执行期间，重复的使能/回零/标定请求返回 busy，不排队执行；流式目标暂不接受。
+速度配置复用同一个 worker，此时普通服务也返回 busy，但流式指令会保留最新一条
+通过关节名称、长度、有限值和滤波校验的待发目标。配置成功后再次经过 SDK 校验才提交，
+被替换的目标不进入滤波历史。待发目标按主机单调时钟计算年龄，达到 `cmd_timeout` 即丢弃，
+即使 ROS 时钟暂停也不会发送过期目标。
 `disable` / `emergency_stop` 可以取消当前任务，被取消的原请求返回 `success=false`。
 服务仍使用原来的 `Trigger` 类型，成功响应表示操作已返回，不是仅进入后台队列。
 停止后，显式使能或回零成功才恢复流式控制。软件停止仍受 SDK、CAN 排队和驱动耗时影响。
+停止会清除待发目标；已进入 SDK 的速度配置可能继续等待回执，停止响应仍需等待
+SDK 调用及原 worker 退出，迟到的配置结果不会恢复节点运动状态或提交旧目标。
 配套 A7lite SDK 停止也持续锁存，不再等待两秒自动恢复；必须显式 `enable()` 或
 成功完成 `home()` / `home_cancellable()` 才重新接收目标。
 
 启动或使能失败会尝试失能并关闭 SDK，记录具体错误；关闭连接后需重启节点。
+回零的慢速配置部分失败时，服务返回原始 SDK 错误；后续目标只有在全部关节
+重新配置为慢速后才可接收，并从新的滤波历史和启动延时开始。
 可取消回零和反馈新鲜度依赖本仓库 `requirements/source-versions.txt` 指定的 arm/transport 源码，
 仅有相同版本号不代表代码一致。旧 SDK 会在打开 CAN 前被拒绝，见[环境配置](docs/environment_setup.md)。
 
@@ -382,24 +399,21 @@ ROS2 直接依赖 `linkerbot-arm>=0.6.0,<0.7.0`，无需聚合包或 hand 包。
 
 使用与 ROS2 发行版匹配的 Python，SDK 安装、colcon 构建和节点运行使用同一个环境。
 ROS2 系统 Pinocchio/NumPy 组合与 PyPI `kinetix` extra 的二进制依赖应分别配置。
-已验证的 Jazzy 部署使用 Python 3.12 和读取系统包的 venv；SDK 的
-`constraints/ros-jazzy.txt` 固定 NumPy、SciPy，Pinocchio 和 eigenpy 由 APT 提供。
+Humble 和 Jazzy 都使用读取系统包的 venv；本仓库的
+`constraints/ros-humble.txt` / `constraints/ros-jazzy.txt` 固定 NumPy 1.26.4、SciPy 1.13.1，
+并限定兼容 colcon 的 setuptools >=77,<80。Pinocchio/eigenpy 由对应 ROS APT 包提供。
 
-| 依赖 | 版本与来源 |
-|------|------|
-| linkerbot-arm | 0.6.x；按源码清单安装配套反馈 SDK 的固定提交 |
-| linkerbot-transport | 新组织仓库的 `main`，不固定版本号、tag 或旧提交 |
-| NumPy | Jazzy 部署锁：1.26.4 |
-| SciPy | 已验证 venv：1.13.1；Ubuntu 系统包为 1.11.4 |
-| Pydantic | 2.x |
-| Pinocchio / eigenpy | APT：4.1.0 / 3.13.0；三型号构造均需要运动学 |
+- `linkerbot-arm`：0.6.x，按源码清单安装配套反馈 SDK 的固定提交。
+- `linkerbot-transport`：新组织仓库的 `main`，不固定版本号、tag 或旧提交。
+- Pydantic：2.x。
+- A7、A7lite、P7 构造均需要运动学，即使只使用关节控制也需要 Pinocchio。
 
 安装命令、公司 transport 包源与无硬件检查见 [环境配置](docs/environment_setup.md)。
 
 ROS2 安装基础 SDK，不带 `kinetix` extra；该 extra 只负责 pip 安装依赖，已有兼容
-Pinocchio 的基础包同样提供运动学。保留的 `constraints/ros2.txt` 表示已测 NumPy 1.x /
-SciPy <1.14 范围，并非所有 ROS2 版本的硬性要求。当前旧完整 SDK 要求 NumPy >=2.2.6，
-与 Jazzy 部署锁不兼容；继续使用旧 SDK 时保留其独立环境。
+Pinocchio 的基础包同样提供运动学。SDK 保留的 `constraints/ros2.txt` 表示通用兼容范围，
+安装本包使用本仓库的发行版 profile。当前旧完整 SDK 要求 NumPy >=2.2.6，
+与上述 profile 不兼容；继续使用旧 SDK 时保留其独立环境。
 
 ## 文件结构
 
@@ -411,6 +425,8 @@ linkerbot-arm-ros2/
 ├── README.md                    # 中文说明（默认）
 ├── README_EN.md                 # English documentation
 ├── resource/linker_arm_ros2     # ament 资源标记
+├── constraints/                # Humble / Jazzy 的 pip 依赖约束
+├── docker/                     # 两个发行版的无硬件构建与测试入口
 │
 ├── config/
 │   └── arm_config.yaml          # 统一配置文件（机型、CAN、运动参数）
@@ -428,6 +444,7 @@ linkerbot-arm-ros2/
 │   └── dual_arm.launch.py       # 双臂启动（从 arm_config.yaml 读取配置）
 │
 ├── scripts/
+│   ├── check_ros_environment.py # 发行版/Python/依赖与真实 URDF 检查（无 CAN）
 │   ├── detect_can.cpp           # CAN 设备自动检测程序（需用 g++ 编译）
 │   ├── detect_can.sh            # 检测脚本（自动激活 CAN 接口，sudo 执行）
 │   └── test_lifecycle.py        # SDK 生命周期测试（enable/disable/home/stream/close）

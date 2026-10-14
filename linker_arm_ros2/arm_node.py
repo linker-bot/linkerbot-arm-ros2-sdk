@@ -3,8 +3,8 @@
 """ROS2 communication node with cancellable lifecycle tasks.
 
 SDK construction and middleware setup finish before auto-enable/home starts.
-Lifecycle services await worker results without occupying the ROS executor;
-state publication continues while a normal task runs. A separate stop task
+Lifecycle services and speed configuration use workers without occupying the
+ROS executor; state publication continues while a normal task runs. A separate stop task
 cancels home, and streaming stays gated until an explicit successful home or
 enable. Shutdown cancels workers, attempts disable, then releases SDK resources.
 
@@ -115,6 +115,7 @@ class ArmNode(Node):
         self.normal_speed_active = False
         self._speed_recovery_pending = False
         self._slow_speed_ready = False
+        self._pending_command = None
 
         self._filter_buffers: list[list[float]] = [[] for _ in range(NUM_JOINTS)]
         self._filter_sums: list[float] = [0.0] * NUM_JOINTS
@@ -250,8 +251,11 @@ class ArmNode(Node):
         if self._command_lock.acquire(blocking=False):
             try:
                 if not self._tasks.busy and not self._halted:
-                    if self.enabled and self.has_first_cmd:
-                        self._update_speed_mode()
+                    if self.enabled:
+                        if self._pending_command is not None:
+                            self._accept_pending_command()
+                        elif self.has_first_cmd:
+                            self._update_speed_mode()
             finally:
                 self._command_lock.release()
 
@@ -289,9 +293,11 @@ class ArmNode(Node):
                 nanoseconds=stamp_ns, clock_type=ros_now.clock_type
             ).to_msg()
             msg.name = self.joint_names
-            msg.position = [joint.angle for joint in feedback.joints]
-            msg.velocity = [joint.velocity for joint in feedback.joints]
-            msg.effort = [joint.torque for joint in feedback.joints]
+            # Humble's generated float64 setters reject integer-valued numbers.
+            # Freshness validation above still rejects non-finite snapshots.
+            msg.position = [float(joint.angle) for joint in feedback.joints]
+            msg.velocity = [float(joint.velocity) for joint in feedback.joints]
+            msg.effort = [float(joint.torque) for joint in feedback.joints]
         except Exception as error:
             self._report_feedback_problem(f"failed to read feedback: {error}")
             return
@@ -310,50 +316,103 @@ class ArmNode(Node):
             self.get_logger().warn(f"Joint state publication paused: {problem}")
             self._feedback_problem = problem
 
-    def _set_speed_mode(self, *, normal):
+    def _set_speed_mode(self, *, normal, raise_on_error=False, cancel=None):
         velocity = self.normal_max_velocity if normal else self.slow_max_velocity
         try:
             self.arm.set_velocities([velocity] * NUM_JOINTS)
-        except Exception as error:
+        except BaseException as error:
             # A multi-joint speed write may have partially succeeded. Before
             # admitting another target, restore slow speed for every joint.
+            with self._command_lock:
+                if cancel is not None:
+                    self._check_task(cancel)
+                self._speed_recovery_pending = True
+                self._slow_speed_ready = False
+                self.get_logger().error(
+                    f"Speed update failed; target admission waits for slow-speed retry: {error}",
+                    throttle_duration_sec=1.0,
+                )
+            if raise_on_error or not isinstance(error, Exception):
+                raise
+            return False
+        with self._command_lock:
+            if cancel is not None:
+                self._check_task(cancel)
+            self.normal_speed_active = normal
+            self._slow_speed_ready = not normal
+        return True
+
+    def _schedule_speed_mode(self, *, normal, reset_after=False):
+        def configure(cancel):
+            self._check_task(cancel)
+            # Keep receipt waits out of both the executor and command lock:
+            # newer targets can replace the pending one and stop can interrupt.
+            self._set_speed_mode(normal=normal, raise_on_error=True, cancel=cancel)
+            with self._command_lock:
+                self._check_task(cancel)
+                if normal:
+                    self.get_logger().info(
+                        f"Startup delay elapsed, switching to normal speed "
+                        f"({self.normal_max_velocity} rad/s)"
+                    )
+                if reset_after:
+                    pending = self._pending_command
+                    self._reset_command_state()
+                    self._slow_speed_ready = True
+                    self._pending_command = pending
+                if self._pending_command is not None:
+                    # A normal-speed receipt can arrive after command timeout;
+                    # defer its pending target until another slow-speed task.
+                    if not normal or not self._command_restarting():
+                        self._accept_pending_command()
+            return "Speed configured"
+
+        try:
+            self._tasks.submit(configure, kind="speed")
+        except Exception as error:
             self._speed_recovery_pending = True
             self._slow_speed_ready = False
             self.get_logger().error(
-                f"Speed update failed; target admission waits for slow-speed retry: {error}",
+                f"Failed to start speed configuration: {error}",
                 throttle_duration_sec=1.0,
             )
-            return False
-        self.normal_speed_active = normal
-        self._slow_speed_ready = not normal
-        return True
+
+    def _command_restarting(self):
+        return (
+            not self.has_first_cmd
+            or self._speed_recovery_pending
+            or (self.get_clock().now() - self.last_cmd_time).nanoseconds / 1e9
+            >= self.cmd_timeout
+        )
+
+    def _accept_pending_command(self):
+        positions, received_at = self._pending_command
+        self._pending_command = None
+        if time.monotonic() - received_at < self.cmd_timeout:
+            self._accept_positions(positions, received_at=received_at)
 
     def _update_speed_mode(self):
         now = self.get_clock().now()
         time_since_last_cmd = (now - self.last_cmd_time).nanoseconds / 1e9
 
         if self._speed_recovery_pending:
-            if self._set_speed_mode(normal=False):
-                self._reset_command_state()
+            self._schedule_speed_mode(normal=False, reset_after=True)
             return
 
         if time_since_last_cmd >= self.cmd_timeout:
             if self.normal_speed_active:
-                if not self._set_speed_mode(normal=False):
-                    return
                 self.get_logger().warn(
-                    f"No accepted command for {time_since_last_cmd:.1f}s, switching to slow speed"
+                    f"No accepted command for {time_since_last_cmd:.1f}s, configuring slow speed",
+                    throttle_duration_sec=1.0,
                 )
+                self._schedule_speed_mode(normal=False, reset_after=True)
+                return
             self._reset_command_state()
             return
 
         time_since_first_cmd = (now - self.first_cmd_time).nanoseconds / 1e9
         if not self.normal_speed_active and time_since_first_cmd >= self.startup_delay:
-            if self._set_speed_mode(normal=True):
-                self.get_logger().info(
-                    f"Startup delay elapsed, switching to normal speed "
-                    f"({self.normal_max_velocity} rad/s)"
-                )
+            self._schedule_speed_mode(normal=True)
 
     # ================================================================
     # 指令回调
@@ -364,13 +423,32 @@ class ArmNode(Node):
         if not self._command_lock.acquire(blocking=False):
             return
         try:
-            if self._tasks.busy or self._halted or self._connection_closed:
+            if self._halted or self._connection_closed:
+                return
+            if self._tasks.configuring_speed:
+                positions = self._command_positions(msg)
+                if positions is not None:
+                    try:
+                        self._prepare_filter(
+                            positions, reset=self._command_restarting()
+                        )
+                    except ValueError as error:
+                        self.get_logger().error(str(error), throttle_duration_sec=1.0)
+                    else:
+                        self._pending_command = (positions, time.monotonic())
+                return
+            if self._tasks.busy:
                 return
             self._accept_command(msg)
         finally:
             self._command_lock.release()
 
     def _accept_command(self, msg: JointState):
+        positions = self._command_positions(msg)
+        if positions is not None:
+            self._accept_positions(positions)
+
+    def _command_positions(self, msg: JointState):
         if not self.enabled:
             self.get_logger().warn(
                 "Received command but arm is not enabled, ignoring",
@@ -408,24 +486,26 @@ class ArmNode(Node):
                 )
                 return
 
+        return positions
+
+    def _accept_positions(self, positions, *, received_at=None):
         # Also handle a command arriving after timeout but before the timer.
-        now = self.get_clock().now()
-        restarting = (
-            not self.has_first_cmd
-            or self._speed_recovery_pending
-            or (now - self.last_cmd_time).nanoseconds / 1e9 >= self.cmd_timeout
-        )
+        restarting = self._command_restarting()
         try:
             filtered, buffers, sums = self._prepare_filter(positions, reset=restarting)
         except ValueError as error:
             self.get_logger().error(str(error), throttle_duration_sec=1.0)
             return
 
-        # Speed configuration precedes the first/recovery target. These two SDK
-        # calls are not atomic: success here means admission, not a motor ACK.
+        # Speed configuration waits for backend send receipts before the
+        # first/recovery target. The calls are not atomic and neither confirms
+        # motor execution; target success still means queue admission.
         if restarting and (not self._slow_speed_ready or self.normal_speed_active):
-            if not self._set_speed_mode(normal=False):
-                return
+            self._pending_command = (
+                positions, time.monotonic() if received_at is None else received_at
+            )
+            self._schedule_speed_mode(normal=False)
+            return
         try:
             self.arm.set_angles(filtered)
         except Exception as error:
@@ -436,6 +516,9 @@ class ArmNode(Node):
 
         # Commit only a target accepted by the SDK. Rejected messages neither
         # enter filter history nor extend the valid-command timeout.
+        # A speed worker may leave a pending target while its task finalizes.
+        # Once a newer target is admitted, that older target must not be replayed.
+        self._pending_command = None
         self._filter_buffers, self._filter_sums = buffers, sums
         self._speed_recovery_pending = False
         now = self.get_clock().now()
@@ -503,6 +586,7 @@ class ArmNode(Node):
         self._check_task(cancel)
 
     def _reset_command_state(self):
+        self._pending_command = None
         self.has_first_cmd = False
         self.normal_speed_active = False
         self.first_cmd_time = None
@@ -513,9 +597,12 @@ class ArmNode(Node):
         self._slow_speed_ready = False
 
     def _home(self, cancel):
-        self._task_call(
-            cancel, self.arm.set_velocities, [self.slow_max_velocity] * NUM_JOINTS
-        )
+        with self._command_lock:
+            self._check_task(cancel)
+            # A failed home speed write can leave only some joints at slow
+            # speed. Reuse streaming's recovery gate and preserve the SDK error
+            # for the lifecycle service instead of resuming the old stream.
+            self._set_speed_mode(normal=False, raise_on_error=True)
         self._check_task(cancel)
         # SDK cancellation guards admission even if stop arrives just before
         # home enters the SDK, and cancels P7's host-streamed waypoints.

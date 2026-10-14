@@ -20,6 +20,8 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 - **Joint names** match motor CAN IDs (left: 61-67, right: 51-57)
 - **Lifecycle services**: enable, disable, home, emergency stop, reset error, calibrate zero
 - **Speed management**: slow start → normal after delay → slow on command timeout
+  Speed configuration waits for send receipts in the existing worker, keeping
+  command callbacks, timers, state publication and stop requests responsive.
 - **Command rejection and recovery**: non-finite positions are rejected before
   filtering. SDK-rejected targets do not enter filter history or refresh accepted
   command timestamps. Initial/recovery commands configure slow speed before the
@@ -33,7 +35,7 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 
 ## Prerequisites
 
-- ROS2 Jazzy with Python 3.12 for the validated deployment; Humble requires Python 3.10 and its full dependency combination has not been validated
+- ROS2 Humble (Ubuntu 22.04 / Python 3.10) or Jazzy (Ubuntu 24.04 / Python 3.12)
 - CAN interface configured and active (e.g. `can0`, `can1`)
 - `linkerbot-arm` 0.6.x, imported as `linkerbot_arm`; see [environment setup](docs/environment_setup.md) for package and source installation
 - Pinocchio built for the selected NumPy version; see the environment guide
@@ -45,6 +47,11 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 
 ## Build
 
+Choose **Humble** for Ubuntu 22.04 and **Jazzy** for Ubuntu 24.04. Existing Humble
+installations can stay on Humble; Jazzy is recommended for new Ubuntu 24.04 systems.
+Both use the same nodes, launch files and configuration. Keep a separate venv and
+workspace for each distribution; do not reuse Python or build artifacts across them.
+
 For a new checkout, clone `main` into the example workspace `~/linkerbot_ws`:
 
 ```bash
@@ -52,12 +59,36 @@ mkdir -p ~/linkerbot_ws/src
 git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2.git ~/linkerbot_ws/src/linkerbot-arm-ros2
 ```
 
-Install the matching SDK and activate the venv following [environment setup](docs/environment_setup.md), then build:
+Follow [environment setup](docs/environment_setup.md) or the commands below to
+install the matching SDK and activate the venv before building.
+
+With ROS2 and its APT repository already installed, select your distribution in the
+first line below. Run this in a fresh terminal; source only one ROS distribution.
+
+```bash
+ARM_ROS_DISTRO=humble  # Use jazzy on Ubuntu 24.04
+sudo apt update
+sudo apt install python3-venv python3-pip python3-colcon-common-extensions "ros-${ARM_ROS_DISTRO}-pinocchio"
+source "/opt/ros/${ARM_ROS_DISTRO}/setup.bash"
+/usr/bin/python3 -m venv --system-site-packages "$HOME/.venvs/linkerbot-arm-${ROS_DISTRO}"
+source "$HOME/.venvs/linkerbot-arm-${ROS_DISTRO}/bin/activate"
+ARM_ROS_SOURCE="$HOME/linkerbot_ws/src/linkerbot-arm-ros2"
+ARM_CONSTRAINTS=$(python "$ARM_ROS_SOURCE/scripts/check_ros_environment.py" --print-constraints)
+python -m pip install --upgrade -c "$ARM_CONSTRAINTS" 'pip<26' setuptools wheel 'packaging>=24.2'
+python -m pip install --force-reinstall -c "$ARM_CONSTRAINTS" -r "$ARM_ROS_SOURCE/requirements/source-versions.txt"
+python "$ARM_ROS_SOURCE/scripts/check_ros_environment.py"
+python -m pip check
+```
+
+Stop and correct the environment if the check fails. The source manifest needs
+SSH access to the Gitea repositories. Install the base SDK, without the `kinetix`
+extra: ROS APT supplies Pinocchio. The check loads real ROS modules and all six arm
+URDFs for FK without opening CAN. Then build using the same Python:
 
 ```bash
 cd ~/linkerbot_ws
 
-# Activate the venv from the environment guide, then run Ubuntu Jazzy's colcon with its Python
+# Source the selected ROS distribution and activate its venv before building
 python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
 head -n 1 install/linker_arm_ros2/lib/linker_arm_ros2/arm_node
 python -c "import sys; print(sys.executable)"
@@ -69,6 +100,9 @@ provide a venv colcon entry point can build directly; verify both its interprete
 generated node's interpreter. See [environment setup](docs/environment_setup.md#ros2-系统依赖方案).
 
 > Code verification: ROS2 supports P7; standalone calibration and lifecycle scripts still support A7/A7lite only.
+
+For the repeatable Humble/Jazzy Docker build and no-hardware tests, see
+[docker/README.md](docker/README.md). The test container has no device passthrough.
 
 ## CAN Device Detection
 
@@ -237,15 +271,26 @@ All services use `std_srvs/srv/Trigger`, namespaced under the node name.
 
 Lifecycle services keep the existing `Trigger` type and respond when the operation
 returns. One normal task runs at a time; overlapping normal requests return busy.
-Disable/emergency-stop cancels the active home, whose response reports failure.
-State publishing continues. Streaming resumes only after a successful explicit
-home or enable. SDK/backend latency still applies to software stop calls.
+Lifecycle tasks gate streaming. Speed configuration uses the same worker and
+retains only the latest pending target that passes name, length, finite-value and
+filter checks. It still needs SDK validation before submission; replaced targets
+never enter filter history. Pending targets expire after `cmd_timeout` on the host
+monotonic clock, including while ROS time is paused.
+Disable/emergency-stop cancels the active lifecycle or speed task and clears the
+pending target. A cancelled lifecycle request reports failure. State publishing
+continues. After a stop, streaming resumes only after a successful explicit home
+or enable. An SDK speed call already in progress may keep waiting for its receipt;
+the stop response waits for SDK completion and the interrupted worker to exit.
+Late configuration results cannot restore motion or submit an old target.
+SDK/backend latency still applies to software stop calls.
 The paired A7lite SDK also latches its stop instead of restoring motion after two seconds.
 Explicit `enable()` or a successful `home()` / `home_cancellable()` is required before it
 accepts targets again.
 
 Startup/enable failures attempt disable and close; a closed connection requires a
-node restart. Install the exact arm/transport sources in
+node restart. A partial failure while configuring home speed returns the original
+SDK error. New targets require a complete slow-speed retry for every joint and
+restart the filter history and startup delay. Install the exact arm/transport sources in
 `requirements/source-versions.txt`; older SDKs are rejected before opening CAN.
 Matching version numbers alone do not identify this unreleased source baseline.
 
@@ -394,26 +439,24 @@ The independent `linkerbot_arm`, `linkerbot_hand` and `linkerbot_transport` name
 Use the Python version provided by your ROS2 distribution. Install the SDK, build with colcon
 and run the node in the same environment. Configure the ROS2 system Pinocchio/NumPy binaries
 separately from the PyPI `kinetix` extra.
-The validated Jazzy deployment uses Python 3.12 and a venv with system site packages.
-SDK `constraints/ros-jazzy.txt` pins NumPy and SciPy; APT provides Pinocchio and eigenpy.
+Both distributions use a venv with system site packages. This repository's
+`constraints/ros-humble.txt` / `constraints/ros-jazzy.txt` pin NumPy 1.26.4 and SciPy 1.13.1
+and constrain setuptools to >=77,<80 for colcon. The matching ROS APT packages provide
+Pinocchio and eigenpy.
 
-| Dependency | Version and source |
-|-----------|---------|
-| linkerbot-arm | 0.6.x; install the paired feedback SDK commit pinned in the source manifest |
-| linkerbot-transport | `main` in the new organization; no version, tag or old commit pin |
-| NumPy | Jazzy deployment lock: 1.26.4 |
-| SciPy | Validated venv: 1.13.1; Ubuntu system package: 1.11.4 |
-| Pydantic | 2.x |
-| Pinocchio / eigenpy | APT: 4.1.0 / 3.13.0; all three arm constructors require kinematics |
+- `linkerbot-arm`: 0.6.x; install the paired feedback SDK commit pinned in the source manifest.
+- `linkerbot-transport`: `main` in the new organization, with no version, tag or old commit pin.
+- Pydantic: 2.x.
+- A7, A7lite and P7 constructors all require kinematics, including for joint-only control.
 
 See [environment setup](docs/environment_setup.md) for installation, the company transport
 package source and checks that do not open hardware.
 
 Install the base SDK for ROS2, without the `kinetix` extra. The extra only installs pip
 dependencies; the base SDK provides the same kinematics when compatible Pinocchio is present.
-The retained `constraints/ros2.txt` represents a tested NumPy 1.x / SciPy <1.14 range rather
-than a universal ROS2 requirement. The current legacy full SDK requires NumPy >=2.2.6 and
-cannot share this Jazzy deployment lock; keep it in its own environment.
+The SDK's retained `constraints/ros2.txt` describes a general compatibility range;
+use this repository's distribution profile to install this ROS package. The current
+legacy full SDK requires NumPy >=2.2.6 and cannot share these profiles; keep it in its own environment.
 
 ## File Structure
 
@@ -425,6 +468,8 @@ linkerbot-arm-ros2/
 ├── README.md                    # Chinese documentation (default)
 ├── README_EN.md                 # English documentation
 ├── resource/linker_arm_ros2     # ament resource marker
+├── constraints/                # Humble / Jazzy pip dependency constraints
+├── docker/                     # Build and no-hardware tests for both distributions
 │
 ├── config/
 │   └── arm_config.yaml          # Unified config (arm type, CAN, motion params)
@@ -442,6 +487,7 @@ linkerbot-arm-ros2/
 │   └── dual_arm.launch.py       # Dual arm launch (reads arm_config.yaml)
 │
 ├── scripts/
+│   ├── check_ros_environment.py # ROS/Python/dependency and real URDF checks (no CAN)
 │   ├── detect_can.cpp           # CAN device auto-detection program (compile with g++)
 │   ├── detect_can.sh            # Detection wrapper script (activates CAN, runs with sudo)
 │   └── test_lifecycle.py        # SDK lifecycle test (enable/disable/home/stream/close)

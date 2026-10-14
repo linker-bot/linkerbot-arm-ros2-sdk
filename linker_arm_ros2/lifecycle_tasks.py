@@ -13,6 +13,7 @@ class TaskCancelled(Exception):
 
 @dataclass
 class _Task:
+    kind: str = "lifecycle"
     cancel: threading.Event = field(default_factory=threading.Event)
     done: threading.Event = field(default_factory=threading.Event)
     future: Future = field(default_factory=Future)
@@ -35,8 +36,18 @@ class LifecycleTasks:
         with self._lock:
             return self._closing or self._active is not None or self._stop is not None
 
+    @property
+    def configuring_speed(self) -> bool:
+        with self._lock:
+            return (
+                not self._closing
+                and self._stop is None
+                and self._active is not None
+                and self._active.kind == "speed"
+            )
+
     def submit(
-        self, operation: Callable[[threading.Event], str], *, stop=False
+        self, operation: Callable[[threading.Event], str], *, stop=False, kind="lifecycle"
     ) -> Future:
         with self._lock:
             if self._closing or self._stop is not None or (not stop and self._active):
@@ -48,7 +59,7 @@ class LifecycleTasks:
             active = self._active
             if stop and active is not None:
                 active.cancel.set()
-            task = _Task()
+            task = _Task(kind=kind)
             if stop:
                 self._stop = task
             else:

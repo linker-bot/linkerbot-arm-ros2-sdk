@@ -16,7 +16,9 @@ from linker_arm_ros2 import arm_node, sdk_adapter
 
 @pytest.mark.parametrize("arm_type", ["a7", "a7lite", "p7"])
 @pytest.mark.parametrize("side,channel", [("left", "can0"), ("right", "can1")])
-def test_node_adapter_sdk_call_chain(monkeypatch, arm_type, side, channel):
+def test_node_adapter_sdk_call_chain(
+    monkeypatch, arm_type, side, channel, wait_for_tasks
+):
     cls = create_autospec(sdk_adapter._ARM_CLASSES[arm_type])
     arm = cls.return_value
     arm.get_angles.return_value = [0.0] * 7
@@ -62,6 +64,7 @@ def test_node_adapter_sdk_call_chain(monkeypatch, arm_type, side, channel):
         message = JointState()
         message.position = [0.1] * 7
         node._cmd_callback(message)
+        wait_for_tasks(node)
         arm._set_angles.assert_called_once_with([0.1] * 7)
         executor = SingleThreadedExecutor()
         executor.add_node(node)

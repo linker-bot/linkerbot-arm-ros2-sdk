@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("rclpy")
 import rclpy
+from linkerbot_arm import ArmFeedback, JointFeedback
 from rclpy.executors import SingleThreadedExecutor
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
@@ -51,6 +52,12 @@ class FakeArm:
 
     def set_angles(self, values):
         self._call("target")
+
+    def get_feedback(self):
+        received = time.monotonic()
+        return ArmFeedback(
+            (JointFeedback(0, 0, 0, received, received, received),) * 7, True
+        )
 
     def get_angles(self):
         return [0.0] * 7

@@ -38,8 +38,9 @@ This package provides a unified ROS2 communication layer for both A7 and A7 Lite
 - `linkerbot-arm` 0.6.x, imported as `linkerbot_arm`; see [environment setup](docs/environment_setup.md) for package and source installation
 - Pinocchio built for the selected NumPy version; see the environment guide
 - numpy, scipy, python-can, pydantic and `linkerbot-transport[can]` in the same Python environment;
-  use this repository's [source manifest](requirements/source-versions.txt), which pins
-  arm safety/transport compatibility fixes and installs transport from `main` without a version or tag constraint.
+  use this repository's [source manifest](requirements/source-versions.txt) to install the paired feedback SDK
+  at its verified merge commit on `main`, including current safety fixes.
+  Transport comes from the new organization's `main` without a version or tag constraint.
   See [environment setup](docs/environment_setup.md#ros2-系统依赖方案).
 
 ## Build
@@ -118,6 +119,7 @@ right_arm: "can0"
 # Motion parameters
 position_kp: 25.0        # Applied to A7lite only
 publish_rate: 100.0       # State publish rate (Hz)
+feedback_timeout: 0.5     # Maximum host reception age for every feedback field (s)
 cmd_timeout: 6.0          # Seconds without command before switching to slow speed
 slow_max_velocity: 0.5    # Slow speed limit (rad/s)
 normal_max_velocity: 3.0  # Normal speed limit (rad/s)
@@ -238,7 +240,7 @@ returns. One normal task runs at a time; overlapping normal requests return busy
 Disable/emergency-stop cancels the active home, whose response reports failure.
 State publishing continues. Streaming resumes only after a successful explicit
 home or enable. SDK/backend latency still applies to software stop calls.
-The A7lite SDK pinned in the source manifest also latches its stop instead of restoring motion after two seconds.
+The paired A7lite SDK also latches its stop instead of restoring motion after two seconds.
 Explicit `enable()` or a successful `home()` / `home_cancellable()` is required before it
 accepts targets again.
 
@@ -259,6 +261,7 @@ All parameters are configured in `config/arm_config.yaml` and injected via launc
 | `left_arm` | string | `"can1"` | Left arm CAN interface |
 | `right_arm` | string | `"can0"` | Right arm CAN interface |
 | `publish_rate` | double | `100.0` | State publish rate (Hz) |
+| `feedback_timeout` | double | `0.5` | Maximum reception age for every joint position, velocity and torque field (s) |
 | `cmd_timeout` | double | `6.0` | Seconds without command before falling back to slow speed |
 | `slow_max_velocity` | double | `0.5` | Slow speed limit (rad/s) |
 | `normal_max_velocity` | double | `3.0` | Normal speed limit (rad/s) |
@@ -350,7 +353,7 @@ not override the SDK's positive-speed requirement for nonzero motion.
 
 This node uses `set_angles()` for streaming control; `move_j()` is only used internally by `home()`.
 
-The SDK pinned in the source manifest bounds P7 external streaming targets using the configured per-joint velocity
+The paired SDK bounds P7 external streaming targets using the configured per-joint velocity
 and acceleration, including J6/J7. The first frame of a new or resumed stream seeds
 its state from measured positions and holds there. Continue sending periodic external
 commands to approach the requested target; one message does not complete a point move.
@@ -379,7 +382,7 @@ in the current Python environment or explicitly set `LINKERBOT_ARM_SRC` as shown
 
 The node and tools load only `linkerbot_arm`. Both source variables accept only this
 namespace; legacy `linkerbot` source and installed packages are not fallback sources.
-The node still checks the canonical SDK's cancellable-home capability before opening CAN.
+The node checks the canonical SDK's cancellable-home and feedback freshness capabilities before opening CAN.
 Invalid explicit paths and missing dependencies produce actionable errors. Source variables
 do not override an already importable canonical SDK; restart Python when changing SDK sources.
 
@@ -396,7 +399,7 @@ SDK `constraints/ros-jazzy.txt` pins NumPy and SciPy; APT provides Pinocchio and
 
 | Dependency | Version and source |
 |-----------|---------|
-| linkerbot-arm | 0.6.x; use the commit in `requirements/source-versions.txt` |
+| linkerbot-arm | 0.6.x; install the paired feedback SDK commit pinned in the source manifest |
 | linkerbot-transport | `main` in the new organization; no version, tag or old commit pin |
 | NumPy | Jazzy deployment lock: 1.26.4 |
 | SciPy | Validated venv: 1.13.1; Ubuntu system package: 1.11.4 |
@@ -458,3 +461,20 @@ To add support for a new arm (e.g. a different brand):
 ## License
 
 Apache-2.0
+
+## Feedback validity
+
+The node reads `get_feedback()` without CAN queries or forward kinematics. It
+suppresses JointState when any joint field is missing, nonfinite, older than
+`feedback_timeout` (default 0.5 s), or the SDK is closed/faulted. It logs state
+transitions and resumes after complete fresh feedback. This does not change
+motion commands or automatically stop/enable a device.
+
+The stamp is the last observed ROS clock value at or before the **oldest** host
+reception among all published fields. Repeated caches keep their stamp; faster
+position updates cannot hide a stale torque field. Startup/clock epoch changes
+wait for new feedback from every field. Simulated clock pauses do not pause
+monotonic age checks. This is a conservative host observation, not synchronized
+firmware sampling; rounding follows the interval between publication callbacks.
+See [feedback timing](docs/feedback.md) for clock-jump and recovery semantics.
+The SDK must support `get_feedback()`; older SDKs are rejected before CAN opens.

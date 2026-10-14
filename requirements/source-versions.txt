@@ -1,4 +1,5 @@
-# Source baseline with lifecycle/command fixes and the Jazzy installation profile.
-# Pin arm safety/transport compatibility fixes; use current transport main without a version/tag pin.
+# Paired arm source with main safety fixes and feedback freshness; see docs/environment_setup.md.
+# Pin the verified SDK PR #41 squash-merge commit on main.
+# Use current transport main without a version/tag pin.
 linkerbot-transport[can] @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-transport.git@main
-linkerbot-arm @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-arm-python.git@e968358b22c1879853d1eba17735c54110c3c674
+linkerbot-arm @ git+ssh://git@git.linkerhub.work:12222/linker-bot/linkerbot-arm-python.git@afb821c5090fec83c84ceb6861861b1c0112338b

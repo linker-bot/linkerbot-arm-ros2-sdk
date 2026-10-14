@@ -40,27 +40,44 @@ source /opt/ros/jazzy/setup.bash
 source /path/to/ros-arm-venv/bin/activate
 ```
 
-当前节点的可取消生命周期需要配套的 arm/transport 源码。本仓库的
-[requirements/source-versions.txt](../requirements/source-versions.txt) 使用新组织下的地址，
-arm 固定到已合并的安全及 transport 兼容修复提交，transport 从 `main` 安装，
-不固定版本号、tag 或旧提交。源码清单通过 SSH 获取依赖，需要相应 SSH 权限。
-arm checkout 也须使用清单中的提交，以使用配套的 Jazzy 部署锁。
+当前节点的可取消生命周期与反馈新鲜度需要配套的 arm/transport 源码。
+[requirements/source-versions.txt](../requirements/source-versions.txt) 将 arm 固定到已合入 `main`、
+完成冲突处理的实际 Squash 合入提交，同时包含安全修复和 `get_feedback()`；不能用旧反馈
+提交或旧安全基线代替。SDK 仓库为
+[linker-bot/linkerbot-arm-python](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python)。
+清单中的 arm SHA 已核实为 SDK 主分支上的实际合入提交；不以相同版本号代替源码匹配。
+transport 从新组织仓库的 `main` 安装，不固定版本号、tag 或旧提交；清单中的源码依赖通过
+SSH 获取，需要相应 SSH 权限。配套 SDK 提供 Jazzy 部署锁，checkout 必须与清单中的 arm 提交一致。
 
 ```bash
-# 从 ROS2 源码清单读取 arm 提交，使用同一版本提供的部署锁。
 ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' ~/linkerbot_ws/src/linkerbot-arm-ros2/requirements/source-versions.txt)
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python.git /path/to/linkerbot-arm-python
-git -C /path/to/linkerbot-arm-python checkout "$ARM_SOURCE_COMMIT"
-python -m pip install --force-reinstall -c /path/to/linkerbot-arm-python/constraints/ros-jazzy.txt \
+git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python.git ~/linkerbot-arm-python
+git -C ~/linkerbot-arm-python checkout "$ARM_SOURCE_COMMIT"
+python -m pip install --force-reinstall -c ~/linkerbot-arm-python/constraints/ros-jazzy.txt \
   -r ~/linkerbot_ws/src/linkerbot-arm-ros2/requirements/source-versions.txt
 ```
 
 `--force-reinstall` 确保已有 transport 也从当前源码重新安装，不依赖其版本号变化。
-也可将 transport 检出到当前 `main`、arm 检出到清单中的提交，在同一环境先后执行
+也可将 transport 检出到当前 `main`，并将 arm 检出到清单中的完整提交，在同一环境先后执行
 `python -m pip install -e '/path/to/linkerbot-transport[can]'` 和
-`python -m pip install -c /path/to/linkerbot-arm-python/constraints/ros-jazzy.txt -e /path/to/linkerbot-arm-python`。
-节点在创建 SDK 对象前检查 `home_cancellable`，
-缺少时明确提示更新，不会打开 CAN 或尝试旧的不可取消回零。
+`python -m pip install -c ~/linkerbot-arm-python/constraints/ros-jazzy.txt -e ~/linkerbot-arm-python`。
+源码安装不改变 loader 的查找顺序。
+节点在创建 SDK 对象前检查 `home_cancellable` 和 `get_feedback`，
+缺少时明确提示更新，不会打开 CAN，也不会用旧数组读取伪造新鲜反馈。
+
+安装后可先运行不连接硬件的能力检查，再构建节点：
+
+```bash
+python - <<'PY'
+from linkerbot_arm import A7, A7lite, P7
+for cls in (A7, A7lite, P7):
+    assert callable(getattr(cls, "home_cancellable", None)), cls.__name__
+    assert callable(getattr(cls, "get_feedback", None)), cls.__name__
+print("Paired SDK capabilities available")
+PY
+```
+
+状态发布的暂停、恢复和时间戳语义见[反馈有效性](feedback.md)。
 
 APT 包提供 `pinocchio` 模块，但没有 PyPI `pin` 发行元数据；上述安装使用基础 SDK，
 不带 `kinetix` extra。该 extra 只负责 pip 安装依赖，不开关运动学功能，已有兼容
@@ -116,7 +133,7 @@ workspace/src/linkerbot-arm/
 未设置新变量时，旧变量作为兼容别名保留并输出迁移提示。两个变量都只接受含
 `linkerbot_arm` 的新 SDK 源码；loader 不再解析旧完整 SDK 的 `linkerbot` 命名空间。
 推荐改为新变量并指向清单中的独立 arm 源码。当前节点仍在打开 CAN 前检查新 SDK 的
-可取消回零能力。旧 `linkerbot-python-sdk` 不再自动查找，已安装的旧 `linkerbot` 也不作为回退来源。
+可取消回零及反馈新鲜度能力。旧 `linkerbot-python-sdk` 不再自动查找，已安装的旧 `linkerbot` 也不作为回退来源。
 
 显式路径无效时直接报错；SDK 内部缺少依赖时保留原始异常。环境变量不会覆盖已经可导入的
 独立 arm 包，修改 SDK 来源后应重新启动 Python 进程。
@@ -133,7 +150,7 @@ workspace/src/linkerbot-arm/
 名称且没有重复；顺序可不同，节点按名称重排。无名消息继续使用固定的七关节位置顺序。
 长度错误、名称错误或非有限目标在准入前拒绝，不延长有效命令超时或修改滤波历史。
 
-固定源码清单中的 A7lite SDK 将软件停止持续锁存，显式使能或成功回零后才恢复；ROS 节点同时保持
+配套 A7lite SDK 将软件停止持续锁存，显式使能或成功回零后才恢复；ROS 节点同时保持
 自己的流式准入门禁。P7 的外部流式目标受 SDK 的逐关节速度/加速度限幅，首帧保持测量
 位置，后续必须周期输入才能推进目标。以上均是软件提交行为，不代表硬件速度或到位确认。
 

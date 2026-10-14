@@ -49,6 +49,12 @@ class LinkerBotSDKAdapter(ArmProtocol):
                 "from requirements/source-versions.txt before starting this node"
             )
 
+        if not callable(getattr(cls, "get_feedback", None)):
+            raise RuntimeError(
+                "Install linkerbot-arm source with feedback freshness support "
+                "from requirements/source-versions.txt before starting this node"
+            )
+
         self._arm = cls(side=side, interface_name=interface_name, **kwargs)
         self._arm_type = arm_type_lower
 
@@ -97,6 +103,9 @@ class LinkerBotSDKAdapter(ArmProtocol):
         self._arm.set_position_kps(kps)
 
     # ── 状态读取 ─────────────────────────────────────────────────
+
+    def get_feedback(self):
+        return self._arm.get_feedback()
 
     def get_angles(self) -> list[float]:
         return self._arm.get_angles()

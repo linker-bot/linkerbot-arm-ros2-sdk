@@ -22,11 +22,13 @@ import time
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 
 from linker_arm_ros2.arm_factory import create_arm
 from linker_arm_ros2.arm_protocol import ArmProtocol
+from linker_arm_ros2.feedback_clock import FeedbackClock
 from linker_arm_ros2.lifecycle_tasks import LifecycleTasks, TaskCancelled
 
 NUM_JOINTS = 7
@@ -66,6 +68,7 @@ class ArmNode(Node):
         self.declare_parameter("side", "left")
         self.declare_parameter("can_interface", "can0")
         self.declare_parameter("publish_rate", 100.0)
+        self.declare_parameter("feedback_timeout", 0.5)
         self.declare_parameter("cmd_timeout", 3.0)
         self.declare_parameter("auto_enable", True)
         self.declare_parameter("calibrate_zero_on_startup", False)
@@ -81,6 +84,11 @@ class ArmNode(Node):
         self.side = self.get_parameter("side").value
         self.can_interface = self.get_parameter("can_interface").value
         self.publish_rate = self.get_parameter("publish_rate").value
+        self.feedback_timeout = float(self.get_parameter("feedback_timeout").value)
+        if not math.isfinite(self.feedback_timeout) or self.feedback_timeout <= 0:
+            raise ValueError("feedback_timeout must be finite and positive")
+        self._feedback_clock = FeedbackClock(self.feedback_timeout)
+        self._feedback_problem = None
         self.cmd_timeout = self.get_parameter("cmd_timeout").value
         self.auto_enable = self.get_parameter("auto_enable").value
         self.calibrate_zero_on_startup = self.get_parameter(
@@ -250,19 +258,57 @@ class ArmNode(Node):
     def _publish_state(self):
         if self._connection_closed:
             return
-        msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = self.joint_names
         try:
-            msg.position = list(self.arm.get_angles())
-            msg.velocity = list(self.arm.get_velocities())
-            msg.effort = list(self.arm.get_torques())
-        except Exception as e:
-            self.get_logger().warn(
-                f"Failed to read state: {e}", throttle_duration_sec=2.0
+            # Read the immutable snapshot before the clocks so freshly received
+            # fields cannot appear to come from the future due to read ordering.
+            feedback = self.arm.get_feedback()
+            clock = self.get_clock()
+            ros_now = clock.now()
+            now = time.monotonic()
+            self._feedback_clock.observe(
+                now, ros_now.nanoseconds, clock.ros_time_is_active
             )
+            if not feedback.connected:
+                self._report_feedback_problem("SDK closed or CAN connection failed")
+                return
+            if len(feedback.joints) != NUM_JOINTS or not feedback.is_fresh(
+                self.feedback_timeout, now=now
+            ):
+                self._report_feedback_problem(
+                    f"missing, non-finite or stale joint feedback (limit {self.feedback_timeout:g}s)"
+                )
+                return
+            stamp_ns = self._feedback_clock.stamp_ns(feedback.oldest_received_at)
+            if stamp_ns is None:
+                self._report_feedback_problem(
+                    "waiting for feedback in the current ROS clock epoch"
+                )
+                return
+            msg = JointState()
+            msg.header.stamp = Time(
+                nanoseconds=stamp_ns, clock_type=ros_now.clock_type
+            ).to_msg()
+            msg.name = self.joint_names
+            msg.position = [joint.angle for joint in feedback.joints]
+            msg.velocity = [joint.velocity for joint in feedback.joints]
+            msg.effort = [joint.torque for joint in feedback.joints]
+        except Exception as error:
+            self._report_feedback_problem(f"failed to read feedback: {error}")
+            return
+        if self._connection_closed:
             return
         self.state_pub.publish(msg)
+        if self._feedback_problem is not None:
+            self.get_logger().info(
+                "Fresh joint feedback available; state publication resumed"
+            )
+            self._feedback_problem = None
+
+    def _report_feedback_problem(self, problem):
+        # Log transitions only: a frozen ROS clock must not defeat throttling.
+        if problem != self._feedback_problem:
+            self.get_logger().warn(f"Joint state publication paused: {problem}")
+            self._feedback_problem = problem
 
     def _set_speed_mode(self, *, normal):
         velocity = self.normal_max_velocity if normal else self.slow_max_velocity

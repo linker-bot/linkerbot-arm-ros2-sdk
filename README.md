@@ -37,7 +37,8 @@ SDK 发行包和导入仍为 `linkerbot-arm`、`linkerbot_arm`。
 - Pinocchio 与 NumPy 的二进制版本匹配，详见环境说明
 - 同一 Python 环境已安装 SDK 依赖：NumPy、SciPy、Pydantic 及 `linkerbot-transport[can]`；
   按本仓库的[源码清单](requirements/source-versions.txt)安装配套 arm/transport，
-  arm 固定到包含安全及 transport 兼容修复的提交，transport 使用 `main`，不限制版本号或 tag，
+  反馈 SDK 固定到已合入 `main`、完成冲突处理的配套提交；
+  transport 使用新组织仓库的 `main`，不限制版本号或 tag，
   详见[环境配置](docs/environment_setup.md#ros2-系统依赖方案)
 
 ## 构建
@@ -115,6 +116,7 @@ right_arm: "can0"         # 右臂 CAN 接口
 # 运动参数
 position_kp: 25.0        # 仅 A7lite 生效
 publish_rate: 100.0       # 状态发布频率 (Hz)
+feedback_timeout: 0.5     # 任一反馈字段超过此接收年龄则暂停状态发布 (秒)
 cmd_timeout: 6.0          # 无指令超时回退到慢速 (秒)
 slow_max_velocity: 0.5    # 慢速上限 (rad/s)
 normal_max_velocity: 3.0  # 正常速度上限 (rad/s)
@@ -209,6 +211,10 @@ ros2 service call /left_arm_node/emergency_stop std_srvs/srv/Trigger
 - 左臂：`["61", "62", "63", "64", "65", "66", "67"]`
 - 右臂：`["51", "52", "53", "54", "55", "56", "57"]`
 
+状态发布检查七关节的位置、速度和力矩；缺失、非有限、过期或 SDK 关闭/总线报错时暂停，
+完整新反馈恢复后继续。重复缓存不会重新打上当前时间戳，
+详见[反馈有效性与时间戳](docs/feedback.md)。
+
 控制消息的 `position` 必须有七个有限角度。`name` 非空时必须恰好包含当前臂的七个
 CAN ID 名称，每个出现一次；允许任意顺序，节点按名称将角度重排到关节顺序。
 未知、重复、缺失名称或长度不一致会拒绝整条指令，不更新滤波历史和有效命令计时。
@@ -231,11 +237,11 @@ CAN ID 名称，每个出现一次；允许任意顺序，节点按名称将角�
 `disable` / `emergency_stop` 可以取消当前任务，被取消的原请求返回 `success=false`。
 服务仍使用原来的 `Trigger` 类型，成功响应表示操作已返回，不是仅进入后台队列。
 停止后，显式使能或回零成功才恢复流式控制。软件停止仍受 SDK、CAN 排队和驱动耗时影响。
-固定源码清单中的 A7lite SDK 停止也持续锁存，不再等待两秒自动恢复；必须显式 `enable()` 或
+配套 A7lite SDK 停止也持续锁存，不再等待两秒自动恢复；必须显式 `enable()` 或
 成功完成 `home()` / `home_cancellable()` 才重新接收目标。
 
 启动或使能失败会尝试失能并关闭 SDK，记录具体错误；关闭连接后需重启节点。
-可取消回零依赖本仓库 `requirements/source-versions.txt` 指定的 arm/transport 源码，
+可取消回零和反馈新鲜度依赖本仓库 `requirements/source-versions.txt` 指定的 arm/transport 源码，
 仅有相同版本号不代表代码一致。旧 SDK 会在打开 CAN 前被拒绝，见[环境配置](docs/environment_setup.md)。
 
 ## 参数说明
@@ -250,6 +256,7 @@ CAN ID 名称，每个出现一次；允许任意顺序，节点按名称将角�
 | `left_arm` | string | `"can1"` | 左臂 CAN 接口 |
 | `right_arm` | string | `"can0"` | 右臂 CAN 接口 |
 | `publish_rate` | double | `100.0` | 状态发布频率 (Hz) |
+| `feedback_timeout` | double | `0.5` | 任一关节位置/速度/力矩允许的最大主机接收年龄 (秒) |
 | `cmd_timeout` | double | `6.0` | 无指令超时后回退到慢速 (秒) |
 | `slow_max_velocity` | double | `0.5` | 慢速上限 (rad/s) |
 | `normal_max_velocity` | double | `3.0` | 正常速度上限 (rad/s) |
@@ -260,7 +267,7 @@ CAN ID 名称，每个出现一次；允许任意顺序，节点按名称将角�
 `arm_type` 只接受已注册的三款型号，`world_frame` 为 `urdf` / `maestro`，CAN 接口名须非空。
 `auto_enable` 和启动标定开关须为布尔值，`filter_window` 须为正整数；
 `publish_rate` 须为有限正值且周期可表示为 ROS 纳秒定时器，`cmd_timeout` 须为有限正值，
-`startup_delay` 须为有限非负值。
+`startup_delay` 须为有限非负值，`feedback_timeout` 须为有限正值。
 `slow_max_velocity` 范围为 `(0, 50]` rad/s，用于使能后的回零；
 `normal_max_velocity` 范围为 `[0, 50]` rad/s。`position_kp` 须有限、非负且可编码为 float32；
 `tcp_offset` 必须是三个有限数值。零速配置不代替 SDK 对非零运动所需正速度的检查。
@@ -339,7 +346,7 @@ CAN ID 名称，每个出现一次；允许任意顺序，节点按名称将角�
 
 本节点使用 `set_angles()` 进行流式控制，`move_j()` 仅在 `home()` 内部使用。
 
-固定源码清单中的 SDK 将 P7 外部流式目标按当前逐关节速度、加速度配置限幅，覆盖 J6/J7；
+配套 SDK 将 P7 外部流式目标按当前逐关节速度、加速度配置限幅，覆盖 J6/J7；
 每次开始或恢复流式控制的首帧从测量位置建立状态并保持当前位置。
 之后需要周期性发送外部控制指令，才能逐步趋近目标；单次消息不会完成点到点运动。
 SDK 使用单调时钟，按相邻受理目标之间的实际时间间隔计算速度和加速度限制。
@@ -380,7 +387,7 @@ ROS2 系统 Pinocchio/NumPy 组合与 PyPI `kinetix` extra 的二进制依赖应
 
 | 依赖 | 版本与来源 |
 |------|------|
-| linkerbot-arm | 0.6.x，使用 `requirements/source-versions.txt` 指定的源码提交 |
+| linkerbot-arm | 0.6.x；按源码清单安装配套反馈 SDK 的固定提交 |
 | linkerbot-transport | 新组织仓库的 `main`，不固定版本号、tag 或旧提交 |
 | NumPy | Jazzy 部署锁：1.26.4 |
 | SciPy | 已验证 venv：1.13.1；Ubuntu 系统包为 1.11.4 |

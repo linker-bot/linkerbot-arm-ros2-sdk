@@ -85,6 +85,15 @@ class ArmProtocol(ABC):
 
     # ── 状态读取 ─────────────────────────────────────────────────
 
+    def get_feedback(self):
+        """Return immutable joint feedback with host monotonic reception times.
+
+        Must support ``joints``, ``connected``, ``oldest_received_at`` and
+        ``is_fresh(max_age_s, now=...)`` (see linkerbot_arm.ArmFeedback).
+        Never emulate freshness by timestamping the legacy numeric getters.
+        """
+        raise NotImplementedError("This adapter does not support feedback freshness")
+
     @abstractmethod
     def get_angles(self) -> list[float]:
         """获取 7 个关节的当前角度 (rad)。"""

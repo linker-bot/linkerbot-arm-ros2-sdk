@@ -9,12 +9,14 @@
 用法：
   ros2 launch linker_arm_ros2 dual_arm.launch.py
 """
+
 import os
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from launch import LaunchDescription
 from launch_ros.actions import Node
+
+from launch import LaunchDescription
 
 
 def _load_config() -> dict:
@@ -32,6 +34,7 @@ def generate_launch_description():
         "auto_enable": cfg.get("auto_enable", True),
         "calibrate_zero_on_startup": cfg.get("calibrate_zero", False),
         "publish_rate": float(cfg.get("publish_rate", 100.0)),
+        "feedback_timeout": float(cfg.get("feedback_timeout", 0.5)),
         "cmd_timeout": float(cfg.get("cmd_timeout", 3.0)),
         "slow_max_velocity": float(cfg.get("slow_max_velocity", 0.5)),
         "normal_max_velocity": float(cfg.get("normal_max_velocity", 3.0)),
@@ -47,11 +50,13 @@ def generate_launch_description():
         output="screen",
         respawn=True,
         respawn_delay=3.0,
-        parameters=[{
-            **shared_params,
-            "side": "left",
-            "can_interface": cfg.get("left_arm", "can0"),
-        }],
+        parameters=[
+            {
+                **shared_params,
+                "side": "left",
+                "can_interface": cfg.get("left_arm", "can0"),
+            }
+        ],
     )
 
     right_node = Node(
@@ -61,11 +66,13 @@ def generate_launch_description():
         output="screen",
         respawn=True,
         respawn_delay=3.0,
-        parameters=[{
-            **shared_params,
-            "side": "right",
-            "can_interface": cfg.get("right_arm", "can1"),
-        }],
+        parameters=[
+            {
+                **shared_params,
+                "side": "right",
+                "can_interface": cfg.get("right_arm", "can1"),
+            }
+        ],
     )
 
     return LaunchDescription([left_node, right_node])

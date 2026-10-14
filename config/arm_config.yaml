@@ -18,6 +18,7 @@ right_arm: "can2"
 
 # ── 运动参数 ─────────────────────────────────────────────────
 position_kp: 25.0         # A7 Lite 位置环 KP（刚度）；仅 a7lite 生效
+feedback_timeout: 0.5    # 任一关节位置/速度/力矩超过此接收年龄时暂停状态发布 (秒)
 publish_rate: 100.0       # 状态发布频率 (Hz)
 cmd_timeout: 6.0          # 无指令超时回退到慢速 (秒)
 slow_max_velocity: 0.5    # 慢速上限 (rad/s)

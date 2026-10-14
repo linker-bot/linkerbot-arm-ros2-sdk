@@ -104,3 +104,26 @@ def test_cancellable_home_passes_the_same_signal(monkeypatch, arm_type):
     cancel = threading.Event()
     arm.home_cancellable(cancel)
     cls.return_value.home_cancellable.assert_called_once_with(cancel)
+
+
+@pytest.mark.parametrize("arm_type", ["a7", "a7lite", "p7"])
+def test_feedback_passthrough(monkeypatch, arm_type):
+    cls = create_autospec(sdk_adapter._ARM_CLASSES[arm_type])
+    monkeypatch.setitem(sdk_adapter._ARM_CLASSES, arm_type, cls)
+    arm = create_arm(arm_type, "left", "can0")
+    assert arm.get_feedback() is cls.return_value.get_feedback.return_value
+    cls.return_value.get_feedback.assert_called_once_with()
+    cls.return_value.get_state.assert_not_called()
+
+
+def test_sdk_without_feedback_is_rejected_before_can_open(monkeypatch):
+    class OldSDK:
+        def __init__(self, **kwargs):
+            pytest.fail("Incompatible SDK must be rejected before opening CAN")
+
+        def home_cancellable(self, cancel):
+            pass
+
+    monkeypatch.setitem(sdk_adapter._ARM_CLASSES, "a7", OldSDK)
+    with pytest.raises(RuntimeError, match="feedback freshness support"):
+        create_arm("a7", "left", "can0")

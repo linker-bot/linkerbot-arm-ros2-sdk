@@ -1,8 +1,10 @@
 """Real rclpy, messages and adapter with fake SDK arms; never open a CAN bus."""
 
+import time
 from unittest.mock import create_autospec
 
 import pytest
+from linkerbot_arm import ArmFeedback, JointFeedback
 
 rclpy = pytest.importorskip("rclpy")
 from rclpy.executors import SingleThreadedExecutor
@@ -20,6 +22,10 @@ def test_node_adapter_sdk_call_chain(monkeypatch, arm_type, side, channel):
     arm.get_angles.return_value = [0.0] * 7
     arm.get_velocities.return_value = [0.0] * 7
     arm.get_torques.return_value = [0.0] * 7
+    received = time.monotonic()
+    arm.get_feedback.return_value = ArmFeedback(
+        (JointFeedback(0, 0, 0, received, received, received),) * 7, True
+    )
     monkeypatch.setitem(sdk_adapter._ARM_CLASSES, arm_type, cls)
     monkeypatch.setattr(arm_node.time, "sleep", lambda duration: None)
     rclpy.init(
@@ -48,9 +54,10 @@ def test_node_adapter_sdk_call_chain(monkeypatch, arm_type, side, channel):
         assert node.state_pub.topic_name == f"/{side}_arm_joint_state"
         assert node.cmd_sub.topic_name == f"/{side}_arm_joint_control"
         node._publish_state()
-        arm.get_angles.assert_called_once()
-        arm.get_velocities.assert_called_once()
-        arm.get_torques.assert_called_once()
+        arm.get_feedback.assert_called_once()
+        arm.get_angles.assert_not_called()
+        arm.get_velocities.assert_not_called()
+        arm.get_torques.assert_not_called()
         node.enabled = True
         message = JointState()
         message.position = [0.1] * 7

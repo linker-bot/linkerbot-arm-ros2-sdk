@@ -1,4 +1,4 @@
-include README_EN.md pytest.ini
+include README.md README_zh.md pytest.ini
 recursive-include docs *.md
 include scripts/calibrate_arm_zero.py scripts/calibrate_arm_zero.sh scripts/test_lifecycle.py
 global-exclude __pycache__ *.py[cod]

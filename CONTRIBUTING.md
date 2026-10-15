@@ -1,10 +1,10 @@
-# 协作流程（linkerbot-arm-ros2）
+# 协作流程（linkerbot-arm-ros2-sdk）
 
 > 面向本仓库贡献者的日常使用说明。所有改动都通过 **Issue → 分支 → PR → 审批合并** 完成，**禁止直接向 `main` 推送**。
 
 ## 本仓库特点
 
-- 仓库地址为 [linker-bot/linkerbot-arm-ros2](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2)，ROS2 包名仍为 `linker_arm_ros2`。
+- 仓库地址为 [linker-bot/linkerbot-arm-ros2-sdk](https://github.com/linker-bot/linkerbot-arm-ros2-sdk)，ROS2 包名仍为 `linker_arm_ros2`。
 - **长期分支为 `main`**（默认分支），没有下游定制分支。
 - **PR 的目标分支(base)为 `main`**。
 - **暂无 CI**（自动检查待补充）。
@@ -70,7 +70,7 @@ config(a7lite): 调整零位标定参数
 
 ### 步骤 1 · 创建 Issue
 
-在 Gitea 上新建 issue，写清：背景、涉及改动、验收标准。拿到 issue 编号 `#N`。
+在 GitHub 上新建 issue，写清：背景、涉及改动、验收标准。拿到 issue 编号 `#N`。
 
 ### 步骤 2 · 从 main 切工作分支
 
@@ -92,11 +92,11 @@ git commit -m "feat(p7): 增加 P7 从臂关节限位"
 git push -u origin feat/N-简短描述
 ```
 
-在 Gitea 上开 PR：
+在 GitHub 上开 PR：
 
 - **base(目标分支)** 选 `main`。
 - 标题遵循提交信息规范。
-- 正文写 **`Closes #N`**，合并后 Gitea 自动关闭对应 issue。正文模板：
+- 正文写 **`Closes #N`**，合入默认分支后 GitHub 自动关闭对应 issue。正文模板：
 
   ```markdown
   Closes #N
@@ -108,7 +108,7 @@ git push -u origin feat/N-简短描述
   - 如何验证（实机外部指令控制、编译通过等）
   ```
 
-若开发中途想提前收集反馈但尚未就绪，把 PR 标题加前缀 `WIP:`，Gitea 会阻止其被合并。
+若开发中途想提前收集反馈但尚未就绪，创建 Draft PR；准备好后再标记为 Ready for review。
 
 ### 步骤 5 · 审批与合并
 

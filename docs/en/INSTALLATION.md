@@ -10,7 +10,7 @@ Use a separate terminal, venv, and workspace for each distribution. Do not sourc
 
 ```bash
 mkdir -p ~/linkerbot_ws/src
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2.git ~/linkerbot_ws/src/linkerbot-arm-ros2
+git clone --branch main https://github.com/linker-bot/linkerbot-arm-ros2-sdk.git ~/linkerbot_ws/src/linkerbot-arm-ros2
 ```
 
 The following commands assume this workspace. For an existing checkout, set `ARM_ROS_SOURCE` to its actual path.
@@ -40,7 +40,7 @@ The SDK requires Pinocchio when constructing an arm, including for joint-only co
 
 ## 4. Install the Paired SDK
 
-The ROS2 [source manifest](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2/src/branch/main/requirements/source-versions.txt) selects an SDK commit with cancellable homing, send receipts, and feedback freshness. Transport always installs from current `main`, without a version or tag constraint.
+The ROS2 [source manifest](https://github.com/linker-bot/linkerbot-arm-ros2-sdk/blob/main/requirements/source-versions.txt) selects an SDK commit with cancellable homing, send receipts, and feedback freshness. Transport always installs from current `main`, without a version or tag constraint.
 
 ```bash
 python -m pip install --force-reinstall -c "$ARM_CONSTRAINTS" \
@@ -49,14 +49,14 @@ python "$ARM_ROS_SOURCE/scripts/check_ros_environment.py"
 python -m pip check
 ```
 
-The manifest uses Git SSH and requires repository access. `--force-reinstall` also refreshes an existing transport installation even if its version number has not changed. A matching SDK version number alone does not guarantee the required capabilities.
+The manifest obtains source dependencies over GitHub HTTPS. `--force-reinstall` also refreshes an existing transport installation even if its version number has not changed. A matching SDK version number alone does not guarantee the required capabilities.
 
-Without Git SSH configuration, install HTTPS source checkouts instead. The dependency directories below must not already exist:
+For editable installations, clone the GitHub sources first. The dependency directories below must not already exist:
 
 ```bash
 mkdir -p ~/linkerbot-deps
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-transport.git ~/linkerbot-deps/linkerbot-transport
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python.git ~/linkerbot-deps/linkerbot-arm-python
+git clone --branch main https://github.com/linker-bot/linkerbot-transport.git ~/linkerbot-deps/linkerbot-transport
+git clone --branch main https://github.com/linker-bot/linkerbot-arm-python-sdk.git ~/linkerbot-deps/linkerbot-arm-python
 ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' "$ARM_ROS_SOURCE/requirements/source-versions.txt")
 git -C ~/linkerbot-deps/linkerbot-arm-python checkout "$ARM_SOURCE_COMMIT"
 python -m pip install -c "$ARM_CONSTRAINTS" -e "$HOME/linkerbot-deps/linkerbot-transport[can]"

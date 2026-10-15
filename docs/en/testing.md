@@ -30,10 +30,10 @@ The host needs access to the Docker daemon. Image building needs APT/PyPI networ
 ```bash
 cd ~/linkerbot_ws/src/linkerbot-arm-ros2
 mkdir -p ../arm-docker-deps
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python.git ../arm-docker-deps/sdk
+git clone --branch main https://github.com/linker-bot/linkerbot-arm-python-sdk.git ../arm-docker-deps/sdk
 ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' requirements/source-versions.txt)
 git -C ../arm-docker-deps/sdk checkout "$ARM_SOURCE_COMMIT"
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-transport.git ../arm-docker-deps/transport
+git clone --branch main https://github.com/linker-bot/linkerbot-transport.git ../arm-docker-deps/transport
 bash docker/verify.sh humble ../arm-docker-deps/sdk ../arm-docker-deps/transport
 bash docker/verify.sh jazzy ../arm-docker-deps/sdk ../arm-docker-deps/transport
 ```

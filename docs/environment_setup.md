@@ -53,10 +53,10 @@ ROS2 当前不支持 H75，也没有暴露 SDK 的全部控制模式或笛卡尔
 
 | 对象 | 名称 |
 | --- | --- |
-| ROS2 源码仓库 | [linkerbot-arm-ros2](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2) |
+| ROS2 源码仓库 | [linkerbot-arm-ros2-sdk](https://github.com/linker-bot/linkerbot-arm-ros2-sdk) |
 | ROS2 包 / Python 导入 | `linker_arm_ros2` |
-| SDK 源码仓库 | [linkerbot-arm-python](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python) |
+| SDK 源码仓库 | [linkerbot-arm-python-sdk](https://github.com/linker-bot/linkerbot-arm-python-sdk) |
 | SDK 发行包 / Python 导入 | `linkerbot-arm` / `linkerbot_arm` |
-| 通信依赖 | [linkerbot-transport](https://gitea.linkerhub.work/linker-bot/linkerbot-transport) |
+| 通信依赖 | [linkerbot-transport](https://github.com/linker-bot/linkerbot-transport) |
 
 本包只依赖独立 arm SDK 和 transport，无需安装 hand SDK 或旧聚合 SDK。

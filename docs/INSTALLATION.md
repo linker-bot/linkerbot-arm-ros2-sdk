@@ -10,7 +10,7 @@ Ubuntu 22.04 使用 **Humble / Python 3.10**；Ubuntu 24.04 使用 **Jazzy / Pyt
 
 ```bash
 mkdir -p ~/linkerbot_ws/src
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2.git ~/linkerbot_ws/src/linkerbot-arm-ros2
+git clone --branch main https://github.com/linker-bot/linkerbot-arm-ros2-sdk.git ~/linkerbot_ws/src/linkerbot-arm-ros2
 ```
 
 后续命令假定这个工作空间路径。已有 checkout 可保留原目录名，将 `ARM_ROS_SOURCE` 改为实际路径。
@@ -40,7 +40,7 @@ SDK 构造机械臂时需要 Pinocchio，即使只做关节控制也不能省略
 
 ## 4. 安装配套 SDK
 
-ROS2 仓库的 [源码清单](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2/src/branch/main/requirements/source-versions.txt) 指定包含可取消回零、发送回执和反馈新鲜度的 SDK 提交。transport 始终从当前 `main` 安装，不限制版本号或 tag。
+ROS2 仓库的 [源码清单](https://github.com/linker-bot/linkerbot-arm-ros2-sdk/blob/main/requirements/source-versions.txt) 指定包含可取消回零、发送回执和反馈新鲜度的 SDK 提交。transport 始终从当前 `main` 安装，不限制版本号或 tag。
 
 ```bash
 python -m pip install --force-reinstall -c "$ARM_CONSTRAINTS" \
@@ -49,14 +49,14 @@ python "$ARM_ROS_SOURCE/scripts/check_ros_environment.py"
 python -m pip check
 ```
 
-清单使用 Git SSH，需要对应仓库访问权限。`--force-reinstall` 使已安装的 transport 也更新到当前源码，不依赖版本号变化。只有相同 SDK 版本号，不能保证包含所需能力。
+清单通过 GitHub HTTPS 获取源码依赖。`--force-reinstall` 使已安装的 transport 也更新到当前源码，不依赖版本号变化。只有相同 SDK 版本号，不能保证包含所需能力。
 
-没有 Git SSH 配置时，可使用 HTTPS 源码安装；以下依赖目录须尚不存在：
+如需可编辑安装，可先克隆 GitHub 源码；以下依赖目录须尚不存在：
 
 ```bash
 mkdir -p ~/linkerbot-deps
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-transport.git ~/linkerbot-deps/linkerbot-transport
-git clone --branch main https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python.git ~/linkerbot-deps/linkerbot-arm-python
+git clone --branch main https://github.com/linker-bot/linkerbot-transport.git ~/linkerbot-deps/linkerbot-transport
+git clone --branch main https://github.com/linker-bot/linkerbot-arm-python-sdk.git ~/linkerbot-deps/linkerbot-arm-python
 ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' "$ARM_ROS_SOURCE/requirements/source-versions.txt")
 git -C ~/linkerbot-deps/linkerbot-arm-python checkout "$ARM_SOURCE_COMMIT"
 python -m pip install -c "$ARM_CONSTRAINTS" -e "$HOME/linkerbot-deps/linkerbot-transport[can]"

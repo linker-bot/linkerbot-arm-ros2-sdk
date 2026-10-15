@@ -53,10 +53,10 @@ ROS2 does not yet support H75 or expose all SDK control modes or Cartesian kinem
 
 | Component | Name |
 | --- | --- |
-| ROS2 source repository | [linkerbot-arm-ros2](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2) |
+| ROS2 source repository | [linkerbot-arm-ros2-sdk](https://github.com/linker-bot/linkerbot-arm-ros2-sdk) |
 | ROS2 package / Python import | `linker_arm_ros2` |
-| SDK source repository | [linkerbot-arm-python](https://gitea.linkerhub.work/linker-bot/linkerbot-arm-python) |
+| SDK source repository | [linkerbot-arm-python-sdk](https://github.com/linker-bot/linkerbot-arm-python-sdk) |
 | SDK distribution / Python import | `linkerbot-arm` / `linkerbot_arm` |
-| Communication dependency | [linkerbot-transport](https://gitea.linkerhub.work/linker-bot/linkerbot-transport) |
+| Communication dependency | [linkerbot-transport](https://github.com/linker-bot/linkerbot-transport) |
 
 Only the standalone arm SDK and transport are required. The hand SDK and the old aggregate SDK are unnecessary.

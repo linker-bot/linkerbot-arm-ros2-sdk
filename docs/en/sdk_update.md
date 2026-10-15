@@ -6,7 +6,7 @@ Stop the arm node and other controllers before updating. Preserve uncommitted lo
 
 ```bash
 ARM_ROS_SOURCE="$HOME/linkerbot_ws/src/linkerbot-arm-ros2"
-git -C "$ARM_ROS_SOURCE" remote set-url origin https://gitea.linkerhub.work/linker-bot/linkerbot-arm-ros2.git
+git -C "$ARM_ROS_SOURCE" remote set-url origin https://github.com/linker-bot/linkerbot-arm-ros2-sdk.git
 git -C "$ARM_ROS_SOURCE" status --short --branch
 git -C "$ARM_ROS_SOURCE" pull --ff-only origin main
 

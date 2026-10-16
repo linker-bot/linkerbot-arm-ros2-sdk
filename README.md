@@ -18,4 +18,13 @@ The ROS2 package and Python import remain `linker_arm_ros2`. Install the SDK/tra
 
 Humble/Jazzy share the node, launch files, and configuration. See [Testing and Docker Validation](docs/en/testing.md) for checks. Tests without hardware do not validate physical motion, stopping, or calibration.
 
-Source: [linker-bot/linkerbot-arm-ros2-sdk](https://github.com/linker-bot/linkerbot-arm-ros2-sdk). See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
+Source: [linker-bot/linkerbot-arm-ros2-sdk](https://github.com/linker-bot/linkerbot-arm-ros2-sdk).
+
+## Contributing and license
+
+English and Chinese contributions are welcome. Follow the
+[Linkerbot contribution guide](https://github.com/linker-bot/.github/blob/main/CONTRIBUTING.md).
+Report vulnerabilities privately using the
+[organization security policy](https://github.com/linker-bot/.github/blob/main/SECURITY.md).
+
+Licensed under the [MIT License](LICENSE).

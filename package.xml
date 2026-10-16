@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>ROS2 wrapper for linkerbot-arm to control LinkerBot robotic arms (A7 / A7 Lite / P7)</description>
   <maintainer email="linker-robot@todo.todo">linker-robot</maintainer>
-  <license>Apache-2.0</license>
+  <license>MIT</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>

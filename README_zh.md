@@ -18,4 +18,11 @@ ROS2 包和 Python 导入名保持 `linker_arm_ros2`。SDK/transport 按本仓�
 
 Humble/Jazzy 共用节点、launch 和配置。开发者检查入口见[测试与 Docker 验证](docs/testing.md)；无硬件测试不代表实机运动、停止或标定效果已验证。
 
-源码：[linker-bot/linkerbot-arm-ros2-sdk](https://github.com/linker-bot/linkerbot-arm-ros2-sdk)。协作流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+源码：[linker-bot/linkerbot-arm-ros2-sdk](https://github.com/linker-bot/linkerbot-arm-ros2-sdk)。
+
+## 贡献与许可证
+
+欢迎用中文或英文参与贡献，请遵循[Linkerbot 贡献指南](https://github.com/linker-bot/.github/blob/main/CONTRIBUTING.md)。
+安全问题请按[组织安全策略](https://github.com/linker-bot/.github/blob/main/SECURITY.md)私下报告。
+
+本项目采用 [MIT 许可证](LICENSE)。

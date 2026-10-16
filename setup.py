@@ -13,7 +13,7 @@ setup(
     packages=find_packages(include=[package_name, f"{package_name}.*"]),
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
-        ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name, ["package.xml", "LICENSE"]),
         (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
         (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
     ],
@@ -24,7 +24,8 @@ setup(
     maintainer="linker-robot",
     maintainer_email="linker-robot@todo.todo",
     description="ROS2 wrapper for linkerbot-arm to control LinkerBot robotic arms",
-    license="Apache-2.0",
+    license="MIT",
+    license_files=["LICENSE"],
     entry_points={
         "console_scripts": [
             "arm_node = linker_arm_ros2.arm_node:main",

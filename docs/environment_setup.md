@@ -4,7 +4,7 @@
 
 ## 快速开始
 
-[安装与构建](INSTALLATION.md)：选择 Humble 或 Jazzy，安装配套 SDK，构建 ROS2 包。完成后先连接设备，再按型号阅读设备功能。
+[安装与构建](INSTALLATION.md)：选择 Humble 或 Jazzy，安装 SDK 和 Transport 的最新 `main` 分支，构建 ROS2 包。完成后先连接设备，再按型号阅读设备功能。
 
 首次使用前请确认型号、左右臂和 CAN 接口。仓库默认 `auto_enable: true`，启动后会使能并慢速回零；[入门示例](getting_started.md)先关闭自动使能，再通过服务启动运动。
 
@@ -47,7 +47,7 @@ ROS2 当前不支持 H75，也没有暴露 SDK 的全部控制模式或笛卡尔
 - [标定与诊断工具](tools.md)：CAN 检测、零位标定及 SDK 生命周期检查。
 - [测试与 Docker 验证](testing.md)：无硬件检查、Humble/Jazzy 测试和验证范围。
 - [故障排查](troubleshooting.md)：安装、启动、数据读取和控制问题。
-- [更新源码](sdk_update.md)：更新 ROS2、配套 SDK 和 transport。
+- [更新源码](sdk_update.md)：更新 ROS2、SDK 和 Transport 的 `main` 分支。
 
 ### 项目名称
 

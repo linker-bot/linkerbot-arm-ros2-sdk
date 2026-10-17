@@ -4,7 +4,7 @@
 
 ## Quick Start
 
-[Installation and Build](INSTALLATION.md): choose Humble or Jazzy, install the paired SDK, and build the ROS2 package. Then connect the device and choose its model guide.
+[Installation and Build](INSTALLATION.md): choose Humble or Jazzy, install the latest SDK and Transport from `main`, and build the ROS2 package. Then connect the device and choose its model guide.
 
 Before starting, confirm the model, side, and CAN interface. The repository defaults to `auto_enable: true`, which enables and homes the arm at slow speed. The [first-session example](getting_started.md) disables automatic enabling and starts motion through a service.
 
@@ -47,7 +47,7 @@ ROS2 does not yet support H75 or expose all SDK control modes or Cartesian kinem
 - [Calibration and Diagnostic Tools](tools.md): CAN detection, zero calibration, and SDK lifecycle checks.
 - [Testing and Docker Validation](testing.md): checks without hardware, Humble/Jazzy tests, and validation limits.
 - [Troubleshooting](troubleshooting.md): installation, startup, data, and control problems.
-- [Updating Sources](sdk_update.md): update ROS2, the paired SDK, and transport.
+- [Updating Sources](sdk_update.md): update ROS2, SDK, and Transport from `main`.
 
 ### Project Names
 

@@ -1,10 +1,10 @@
 # Humble / Jazzy 无硬件 Docker 验证
 
-获取配套 SDK/transport、运行验证、查看结果及验证边界见[测试与 Docker 验证](../docs/testing.md)。
+获取 SDK 和 Transport 的最新 `main` 分支、运行验证、查看结果及验证边界见[测试与 Docker 验证](../docs/testing.md)。
 
 English: [Testing and Docker Validation](../docs/en/testing.md).
 
-从 ROS2 仓库根目录运行，依赖 checkout 须符合源码清单：
+从 ROS2 仓库根目录运行，依赖 checkout 使用最新 `main`：
 
 ```bash
 bash docker/verify.sh humble /path/to/sdk /path/to/transport

@@ -2,7 +2,7 @@
 
 ## 环境检查
 
-在已安装 SDK 的 ROS venv 中执行：
+按[安装说明](INSTALLATION.md)安装 SDK 和 Transport 的最新 `main` 分支后，在 ROS venv 中执行：
 
 ```bash
 ARM_ROS_SOURCE="$HOME/linkerbot_ws/src/linkerbot-arm-ros2"
@@ -31,8 +31,6 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p pytest_timeout tests
 cd ~/linkerbot_ws/src/linkerbot-arm-ros2
 mkdir -p ../arm-docker-deps
 git clone --branch main https://github.com/linker-bot/linkerbot-arm-python-sdk.git ../arm-docker-deps/sdk
-ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' requirements/source-versions.txt)
-git -C ../arm-docker-deps/sdk checkout "$ARM_SOURCE_COMMIT"
 git clone --branch main https://github.com/linker-bot/linkerbot-transport.git ../arm-docker-deps/transport
 bash docker/verify.sh humble ../arm-docker-deps/sdk ../arm-docker-deps/transport
 bash docker/verify.sh jazzy ../arm-docker-deps/sdk ../arm-docker-deps/transport
@@ -40,13 +38,13 @@ bash docker/verify.sh jazzy ../arm-docker-deps/sdk ../arm-docker-deps/transport
 
 测试容器无网络、设备透传或端口映射。默认结果位于 `docker/results/<发行版>/`；第四个参数可指定目录。记录源码提交和修改、构建/测试日志、JUnit XML 与 colcon 结果。失败返回非零退出码；临时容器和构建目录自动清理，镜像保留。
 
-需要重新获取 APT 层时，在命令前设置 `ARM_DOCKER_NO_CACHE=1`。transport 日志中的提交只记录本次测试快照，不是安装版本约束。
+需要重新获取 APT 层时，在命令前设置 `ARM_DOCKER_NO_CACHE=1`。日志中的 SDK 和 Transport 提交用于记录本次测试实际使用的源码。
 
 ## 验证范围
 
 覆盖 Python/ROS 环境、依赖、六个 URDF FK、colcon 构建、节点解释器、包发现、两个 launch 参数和 ROS2/SDK 无硬件测试。集成回归使用真实 ROS2 → adapter → A7 SDK → transport，仅替换 CAN 驱动，检查发送失败、反馈年龄、异步配置、停止取消及目标顺序。
 
-APT、镜像标签与 transport `main` 可能变化，复跑以实际日志为准。
+APT、镜像标签及 SDK、Transport 的 `main` 可能变化，复跑以实际日志为准。
 
 真实 CAN、运动、停止距离和标定需单独实机验证，其他 CPU 架构需在对应平台验证。
 

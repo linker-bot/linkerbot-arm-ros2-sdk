@@ -38,9 +38,9 @@ The SDK requires Pinocchio when constructing an arm, including for joint-only co
 
 <a id="paired-sdk"></a>
 
-## 4. Install the Paired SDK
+## 4. Install the Latest SDK
 
-The ROS2 [source manifest](https://github.com/linker-bot/linkerbot-arm-ros2-sdk/blob/main/requirements/source-versions.txt) selects an SDK commit with cancellable homing, send receipts, and feedback freshness. Transport always installs from current `main`, without a version or tag constraint.
+The ROS2 [source manifest](https://github.com/linker-bot/linkerbot-arm-ros2-sdk/blob/main/requirements/source-versions.txt) installs the latest SDK and Transport sources from `main`.
 
 ```bash
 python -m pip install --force-reinstall -c "$ARM_CONSTRAINTS" \
@@ -49,7 +49,7 @@ python "$ARM_ROS_SOURCE/scripts/check_ros_environment.py"
 python -m pip check
 ```
 
-The manifest obtains source dependencies over GitHub HTTPS. `--force-reinstall` also refreshes an existing transport installation even if its version number has not changed. A matching SDK version number alone does not guarantee the required capabilities.
+The manifest obtains source dependencies over GitHub HTTPS. `--force-reinstall` also refreshes existing SDK and Transport installations to the latest `main`, even if their version numbers have not changed.
 
 For editable installations, clone the GitHub sources first. The dependency directories below must not already exist:
 
@@ -57,8 +57,6 @@ For editable installations, clone the GitHub sources first. The dependency direc
 mkdir -p ~/linkerbot-deps
 git clone --branch main https://github.com/linker-bot/linkerbot-transport.git ~/linkerbot-deps/linkerbot-transport
 git clone --branch main https://github.com/linker-bot/linkerbot-arm-python-sdk.git ~/linkerbot-deps/linkerbot-arm-python
-ARM_SOURCE_COMMIT=$(sed -n 's/^linkerbot-arm @ .*@//p' "$ARM_ROS_SOURCE/requirements/source-versions.txt")
-git -C ~/linkerbot-deps/linkerbot-arm-python checkout "$ARM_SOURCE_COMMIT"
 python -m pip install -c "$ARM_CONSTRAINTS" -e "$HOME/linkerbot-deps/linkerbot-transport[can]"
 python -m pip install -c "$ARM_CONSTRAINTS" -e "$HOME/linkerbot-deps/linkerbot-arm-python"
 python "$ARM_ROS_SOURCE/scripts/check_ros_environment.py"
@@ -76,7 +74,7 @@ source install/setup.bash
 python "$(command -v ros2)" pkg prefix linker_arm_ros2
 ```
 
-The generated node's first line should point to the current venv. Activating a venv does not change `/usr/bin/colcon`'s interpreter, so invoke that entry point with the current `python`. Building does not install the paired SDK for you.
+The generated node's first line should point to the current venv. Activating a venv does not change `/usr/bin/colcon`'s interpreter, so invoke that entry point with the current `python`. Building does not install the SDK for you.
 
 ## Using a New Terminal
 

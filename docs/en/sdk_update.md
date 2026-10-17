@@ -1,6 +1,6 @@
 # Updating Sources
 
-Stop the arm node and other controllers before updating. Preserve uncommitted local changes. This example assumes that the ROS2 checkout is on `main` and can fast-forward. Resolve divergence or local conflicts first rather than using a forced reset.
+Stop the arm node and other controllers before updating. Preserve uncommitted local changes. The commands below switch to `main` and fast-forward it. Resolve divergence or local conflicts first rather than using a forced reset.
 
 ## Update ROS2 and Dependencies
 
@@ -8,6 +8,7 @@ Stop the arm node and other controllers before updating. Preserve uncommitted lo
 ARM_ROS_SOURCE="$HOME/linkerbot_ws/src/linkerbot-arm-ros2"
 git -C "$ARM_ROS_SOURCE" remote set-url origin https://github.com/linker-bot/linkerbot-arm-ros2-sdk.git
 git -C "$ARM_ROS_SOURCE" status --short --branch
+git -C "$ARM_ROS_SOURCE" switch main
 git -C "$ARM_ROS_SOURCE" pull --ff-only origin main
 
 ARM_ROS_DISTRO=humble  # Same as the installed environment
@@ -23,7 +24,16 @@ python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
 source install/setup.bash
 ```
 
-Update the SDK according to the ROS2 manifest rather than substituting any package with the same version. Transport is reinstalled from current `main` without a version, tag, or SHA installation constraint. For HTTPS editable installs, update transport `main` and the manifest-selected SDK checkout, then reinstall using the [installation instructions](INSTALLATION.md#paired-sdk).
+The source manifest reinstalls the latest SDK and Transport from `main`. For HTTPS editable installs, update the existing dependency checkouts first:
+
+```bash
+git -C "$HOME/linkerbot-deps/linkerbot-transport" switch main
+git -C "$HOME/linkerbot-deps/linkerbot-transport" pull --ff-only origin main
+git -C "$HOME/linkerbot-deps/linkerbot-arm-python" switch main
+git -C "$HOME/linkerbot-deps/linkerbot-arm-python" pull --ff-only origin main
+```
+
+Then rerun the editable installation and environment checks in the [installation instructions](INSTALLATION.md#paired-sdk).
 
 ## Changing Distributions
 

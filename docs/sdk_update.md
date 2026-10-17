@@ -1,6 +1,6 @@
 # 更新源码
 
-更新前停止机械臂节点及其他控制程序，保留未提交的本地改动。以下示例假定 ROS2 checkout 在 `main` 且可快进；出现分叉或本地修改冲突时先处理，不使用强制重置。
+更新前停止机械臂节点及其他控制程序，保留未提交的本地改动。以下命令切换到 `main` 并快进更新；出现分叉或本地修改冲突时先处理，不使用强制重置。
 
 ## 更新 ROS2 与依赖
 
@@ -8,6 +8,7 @@
 ARM_ROS_SOURCE="$HOME/linkerbot_ws/src/linkerbot-arm-ros2"
 git -C "$ARM_ROS_SOURCE" remote set-url origin https://github.com/linker-bot/linkerbot-arm-ros2-sdk.git
 git -C "$ARM_ROS_SOURCE" status --short --branch
+git -C "$ARM_ROS_SOURCE" switch main
 git -C "$ARM_ROS_SOURCE" pull --ff-only origin main
 
 ARM_ROS_DISTRO=humble  # 与已安装环境相同
@@ -23,7 +24,16 @@ python /usr/bin/colcon build --packages-select linker_arm_ros2 --symlink-install
 source install/setup.bash
 ```
 
-SDK 按 ROS2 清单更新，不自行替换为任意同版本包；transport 从当前 `main` 重新安装，不添加版本、tag 或 SHA 安装约束。HTTPS 可编辑安装用户按[安装说明](INSTALLATION.md#paired-sdk)更新 transport `main` 和清单指定的 SDK checkout 后重装。
+源码清单会重新安装 SDK 和 Transport 的最新 `main` 分支。HTTPS 可编辑安装用户先更新已有依赖目录：
+
+```bash
+git -C "$HOME/linkerbot-deps/linkerbot-transport" switch main
+git -C "$HOME/linkerbot-deps/linkerbot-transport" pull --ff-only origin main
+git -C "$HOME/linkerbot-deps/linkerbot-arm-python" switch main
+git -C "$HOME/linkerbot-deps/linkerbot-arm-python" pull --ff-only origin main
+```
+
+然后按[安装说明](INSTALLATION.md#paired-sdk)重新执行可编辑安装并检查环境。
 
 ## 更换发行版
 
